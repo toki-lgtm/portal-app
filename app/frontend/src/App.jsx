@@ -298,8 +298,10 @@ function AppContent() {
 
     const fetchApps = async () => {
       try {
+        // ユーザー情報をURL パラメータに含める
+        const userParam = encodeURIComponent(JSON.stringify(user))
         const response = await axios.get(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/apps`
+          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/apps?user=${userParam}`
         )
         setApps(response.data)
       } catch (error) {
