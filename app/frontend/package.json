@@ -19,8 +19,8 @@
     "productName": "社内ポータル",
     "files": [
       "dist/**/*",
-      "public/main.js",
-      "public/preload.js",
+      "public/main.cjs",
+      "public/preload.cjs",
       "node_modules/**/*"
     ],
     "win": {
