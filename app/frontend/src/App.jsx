@@ -21,6 +21,7 @@ import Badge from './components/ui/Badge'
 import Card from './components/ui/Card'
 import ThemeToggle from './components/ui/ThemeToggle'
 import SettingsPage from './components/SettingsPage'
+import EmployeesPage from './components/EmployeesPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -343,7 +344,7 @@ function NotificationBell({ stats, apps }) {
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
-function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings }) {
+function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings, onOpenInternal }) {
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
@@ -448,6 +449,43 @@ function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, o
                         近日公開
                       </Badge>
                     </div>
+                  )
+                }
+
+                // 内部アプリ（社員一覧など）はポータル内ビューへ遷移するボタンとして描画
+                const cardCls =
+                  'group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block relative text-left w-full'
+                const cardInner = (
+                  <>
+                    {/* ピン留め・お気に入りアイコン */}
+                    <div className="absolute top-3 right-3 flex gap-1">
+                      {app.favorite && (
+                        <Star className="w-3.5 h-3.5 text-warning-400" fill="currentColor" />
+                      )}
+                      {app.pinned && (
+                        <Pin className="w-3.5 h-3.5 text-accent-400" />
+                      )}
+                    </div>
+                    <div
+                      className={`w-12 h-12 rounded-xl ${tone} flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition`}
+                    >
+                      {app.icon}
+                    </div>
+                    <h3 className="font-bold text-slate-900 dark:text-white mb-1">{app.name}</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                      {app.description || 'アプリケーションにアクセス'}
+                    </p>
+                    <span className="inline-flex items-center gap-1 text-sm font-semibold text-brand-600 dark:text-brand-400 group-hover:gap-2 transition-all">
+                      開く <ArrowRight className="w-4 h-4" />
+                    </span>
+                  </>
+                )
+
+                if (app.internal) {
+                  return (
+                    <button key={app.id} type="button" onClick={() => onOpenInternal?.(app.view)} className={cardCls}>
+                      {cardInner}
+                    </button>
                   )
                 }
 
@@ -635,6 +673,10 @@ function AppContent() {
     )
   }
 
+  if (view === 'employees') {
+    return <EmployeesPage onBack={() => setView('dashboard')} />
+  }
+
   return (
     <DashboardPage
       user={user}
@@ -644,6 +686,7 @@ function AppContent() {
       stats={stats}
       serverSettings={serverSettings}
       onOpenSettings={() => setView('settings')}
+      onOpenInternal={(v) => setView(v || 'employees')}
     />
   )
 }
