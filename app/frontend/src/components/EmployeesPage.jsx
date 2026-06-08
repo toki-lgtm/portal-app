@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import {
-  ArrowLeft, Search, Plus, Upload, Award, Pencil, Trash2, X, Save,
-  ShieldCheck, AlertTriangle, BadgeCheck, Users, FileSpreadsheet,
+  ArrowLeft, Search, Plus, Download, Award, Pencil, Trash2, X, Save,
+  ShieldCheck, AlertTriangle, BadgeCheck, Users,
+  ChevronUp, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -31,21 +32,56 @@ const LEVELS = [
 // 資格区分の選択肢
 const CATEGORIES = ['特別教育', '技能講習', '免許', 'その他']
 
-// インポート時の列名 → DBフィールドの対応（Excel/CSVのヘッダ名を吸収）
-const IMPORT_HEADER_MAP = {
-  '氏名': 'name', '名前': 'name', 'name': 'name',
-  'ふりがな': 'furigana', 'フリガナ': 'furigana', 'furigana': 'furigana',
-  'メール': 'email', 'メールアドレス': 'email', 'email': 'email',
-  '職種': 'job_type', 'job_type': 'job_type',
-  '部署': 'department', '所属': 'department', 'department': 'department',
-  '会社': 'company', '会社名': 'company', 'company': 'company',
-  '住所': 'address', 'address': 'address',
-  '郵便番号': 'postal_code', '〒': 'postal_code', 'postal_code': 'postal_code',
-  '技能者id': 'skill_id', '技能者ID': 'skill_id', 'skill_id': 'skill_id',
-  '性別': 'gender', 'gender': 'gender',
-  '生年月日': 'birth_date', 'birth_date': 'birth_date',
-  '雇入年月日': 'hire_date', '入社日': 'hire_date', 'hire_date': 'hire_date',
-  '電話': 'phone', '電話番号': 'phone', 'phone': 'phone',
+// ソート対象列のキー → 比較値の取り出し方。文字列は ja ロケール、数値はそのまま比較。
+const SORT_ACCESSORS = {
+  name: (e) => e.furigana || e.name || '',
+  company: (e) => e.company || '',
+  job: (e) => `${e.job_type || ''} ${e.department || ''}`.trim(),
+  hire: (e) => e.hire_date || '',
+  qual: (e) => e.qualification_count || 0,
+}
+
+// 現在表示中の行を CSV（UTF-8 BOM付き＝Excelで文字化けしない）でダウンロード
+function exportEmployeesCsv(rows) {
+  const headers = ['社員ID', '氏名', 'ふりがな', '会社', '職種', '部署', 'メール', '電話',
+    '郵便番号', '住所', '入社日', '勤続年数', '生年月日', '在籍', '資格数']
+  const esc = (v) => {
+    const s = v == null ? '' : String(v)
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }
+  const lines = [headers.join(',')]
+  for (const e of rows) {
+    const y = yearsOfService(e.hire_date)
+    lines.push([
+      e.id, e.name, e.furigana, e.company, e.job_type, e.department, e.email, e.phone,
+      e.postal_code, e.address, e.hire_date, y != null ? y : '', e.birth_date,
+      e.is_active === false ? '退職' : '在籍', e.qualification_count || 0,
+    ].map(esc).join(','))
+  }
+  const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `社員一覧_${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ソート可能なテーブルヘッダ
+function SortTh({ label, k, sort, onSort, className = '' }) {
+  const active = sort.key === k
+  const Icon = !active ? ChevronsUpDown : sort.dir === 'asc' ? ChevronUp : ChevronDown
+  return (
+    <th className={`px-4 py-3 font-semibold ${className}`}>
+      <button
+        onClick={() => onSort(k)}
+        className={`inline-flex items-center gap-1 hover:text-slate-700 dark:hover:text-slate-200 ${active ? 'text-slate-700 dark:text-slate-200' : ''}`}
+      >
+        {label}
+        <Icon className={`w-3.5 h-3.5 ${active ? '' : 'opacity-30'}`} />
+      </button>
+    </th>
+  )
 }
 
 // 認証付き axios 設定を作る
@@ -85,9 +121,10 @@ export default function EmployeesPage({ onBack }) {
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
   const [companyFilter, setCompanyFilter] = useState('')
+  const [activeFilter, setActiveFilter] = useState('active') // 'all' | 'active' | 'inactive'
+  const [sort, setSort] = useState({ key: 'name', dir: 'asc' }) // 並び替え
 
   const [editing, setEditing] = useState(null) // 編集中の社員 or {} (新規)
-  const [showImport, setShowImport] = useState(false)
   const [showQualMaster, setShowQualMaster] = useState(false)
   const [toast, setToast] = useState(null)
 
@@ -139,11 +176,34 @@ export default function EmployeesPage({ onBack }) {
     return employees.filter((e) => {
       if (deptFilter && e.department !== deptFilter) return false
       if (companyFilter && e.company !== companyFilter) return false
+      if (activeFilter === 'active' && e.is_active === false) return false
+      if (activeFilter === 'inactive' && e.is_active !== false) return false
       if (!q) return true
-      return [e.name, e.furigana, e.email, e.job_type, e.department, e.company]
+      return [e.name, e.furigana, e.email, e.job_type, e.department, e.company, e.phone, e.address]
         .some((v) => v && String(v).toLowerCase().includes(q))
     })
-  }, [employees, search, deptFilter, companyFilter])
+  }, [employees, search, deptFilter, companyFilter, activeFilter])
+
+  // 並び替え適用（空値は常に末尾）
+  const sorted = useMemo(() => {
+    const accessor = SORT_ACCESSORS[sort.key] || SORT_ACCESSORS.name
+    const arr = [...filtered]
+    arr.sort((a, b) => {
+      const av = accessor(a), bv = accessor(b)
+      if (typeof av === 'number' || typeof bv === 'number') {
+        return sort.dir === 'asc' ? (av - bv) : (bv - av)
+      }
+      if (!av && bv) return 1
+      if (av && !bv) return -1
+      const r = String(av).localeCompare(String(bv), 'ja')
+      return sort.dir === 'asc' ? r : -r
+    })
+    return arr
+  }, [filtered, sort])
+
+  // ヘッダクリックでソート切替（同列なら昇降反転、別列なら昇順から）
+  const toggleSort = (key) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -186,21 +246,32 @@ export default function EmployeesPage({ onBack }) {
               {companies.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           )}
+          {departments.length > 0 && (
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            >
+              <option value="">全部署</option>
+              {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
           <select
-            value={deptFilter}
-            onChange={(e) => setDeptFilter(e.target.value)}
+            value={activeFilter}
+            onChange={(e) => setActiveFilter(e.target.value)}
             className="px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
           >
-            <option value="">全部署</option>
-            {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+            <option value="active">在籍中</option>
+            <option value="inactive">退職</option>
+            <option value="all">全て</option>
           </select>
+          <Button variant="secondary" size="sm" onClick={() => exportEmployeesCsv(sorted)} disabled={sorted.length === 0}>
+            <Download className="w-4 h-4" />CSV出力
+          </Button>
           {canEdit && (
             <>
               <Button variant="secondary" size="sm" onClick={() => setShowQualMaster(true)}>
                 <Award className="w-4 h-4" />資格マスタ
-              </Button>
-              <Button variant="secondary" size="sm" onClick={() => setShowImport(true)}>
-                <Upload className="w-4 h-4" />インポート
               </Button>
               <Button variant="primary" size="sm" onClick={() => setEditing({ _new: true, app_role: 'member', is_active: true })}>
                 <Plus className="w-4 h-4" />社員を追加
@@ -222,19 +293,19 @@ export default function EmployeesPage({ onBack }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-ink-700">
-                    <th className="px-4 py-3 font-semibold">氏名</th>
-                    <th className="px-4 py-3 font-semibold hidden sm:table-cell">会社</th>
+                    <SortTh label="氏名" k="name" sort={sort} onSort={toggleSort} />
+                    <SortTh label="会社" k="company" sort={sort} onSort={toggleSort} className="hidden sm:table-cell" />
                     <th className="px-4 py-3 font-semibold hidden md:table-cell">電話</th>
-                    <th className="px-4 py-3 font-semibold hidden lg:table-cell">職種 / 部署</th>
-                    <th className="px-4 py-3 font-semibold hidden lg:table-cell">入社日 / 勤続</th>
+                    <SortTh label="職種 / 部署" k="job" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
+                    <SortTh label="入社日 / 勤続" k="hire" sort={sort} onSort={toggleSort} className="hidden lg:table-cell" />
                     <th className="px-4 py-3 font-semibold hidden xl:table-cell">メール</th>
                     <th className="px-4 py-3 font-semibold">権限</th>
-                    <th className="px-4 py-3 font-semibold">資格</th>
+                    <SortTh label="資格" k="qual" sort={sort} onSort={toggleSort} />
                     <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-ink-700">
-                  {filtered.map((e) => (
+                  {sorted.map((e) => (
                     <tr
                       key={e.id}
                       className="hover:bg-slate-50 dark:hover:bg-ink-700/40 cursor-pointer transition"
@@ -293,15 +364,6 @@ export default function EmployeesPage({ onBack }) {
           quals={quals}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); loadAll() }}
-          showToast={showToast}
-        />
-      )}
-
-      {/* インポートモーダル */}
-      {showImport && (
-        <ImportModal
-          onClose={() => setShowImport(false)}
-          onDone={() => { setShowImport(false); loadAll() }}
           showToast={showToast}
         />
       )}
@@ -698,119 +760,6 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
         </Button>
       ))}
     </div>
-  )
-}
-
-// Excel/CSV インポートモーダル
-function ImportModal({ onClose, onDone, showToast }) {
-  const [rows, setRows] = useState([])     // マッピング済みの行
-  const [rawHeaders, setRawHeaders] = useState([])
-  const [fileName, setFileName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const inputRef = useRef(null)
-
-  // ファイル選択 → SheetJSで解析 → ヘッダをマッピング
-  const onFile = async (file) => {
-    if (!file) return
-    setFileName(file.name)
-    try {
-      const XLSX = await import('xlsx')
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf, { type: 'array' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false })
-      if (json.length === 0) { showToast('error', 'データ行が見つかりません'); return }
-      setRawHeaders(Object.keys(json[0]))
-      const mapped = json.map((r) => {
-        const out = {}
-        for (const [col, val] of Object.entries(r)) {
-          const key = IMPORT_HEADER_MAP[String(col).trim().toLowerCase()] || IMPORT_HEADER_MAP[String(col).trim()]
-          if (key && val !== '') out[key] = String(val).trim()
-        }
-        return out
-      }).filter((r) => r.name || r.email)
-      setRows(mapped)
-      if (mapped.length === 0) showToast('error', '「氏名」「メール」列が認識できませんでした。ヘッダ名をご確認ください。')
-    } catch (err) {
-      console.error(err)
-      showToast('error', 'ファイルの解析に失敗しました')
-    }
-  }
-
-  const doImport = async () => {
-    setBusy(true)
-    try {
-      const res = await axios.post(`${apiUrl}/api/employees/import`, { rows }, authConfig())
-      const { inserted, updated, errors } = res.data
-      showToast('success', `インポート完了：新規 ${inserted}件 / 更新 ${updated}件${errors.length ? ` / エラー ${errors.length}件` : ''}`)
-      onDone()
-    } catch (err) {
-      showToast('error', err.response?.data?.error || 'インポートに失敗しました')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <ModalShell title="社員データのインポート" onClose={onClose} wide>
-      <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">Excel(.xlsx) または CSV を選択してください。1行目を見出しとして読み取ります。</p>
-      <p className="text-xs text-slate-400 mb-4">
-        認識する列名：氏名 / ふりがな / メール / 職種 / 部署 / 技能者ID / 性別 / 生年月日 / 雇入年月日 / 電話　（メールが一致する社員は上書き更新）
-      </p>
-
-      <div
-        className="border-2 border-dashed border-slate-300 dark:border-ink-600 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-400 transition"
-        onClick={() => inputRef.current?.click()}
-      >
-        <FileSpreadsheet className="w-8 h-8 mx-auto text-slate-400 mb-2" />
-        <p className="text-sm text-slate-500">{fileName || 'クリックしてファイルを選択'}</p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          className="hidden"
-          onChange={(e) => onFile(e.target.files?.[0])}
-        />
-      </div>
-
-      {rows.length > 0 && (
-        <div className="mt-5">
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">
-            プレビュー（{rows.length}件）<span className="text-xs font-normal text-slate-400 ml-2">検出列: {rawHeaders.join(', ')}</span>
-          </p>
-          <div className="max-h-60 overflow-auto border border-slate-100 dark:border-ink-700 rounded-xl">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 dark:bg-ink-900/40 text-slate-500 sticky top-0">
-                <tr>
-                  <th className="px-3 py-2 text-left">氏名</th>
-                  <th className="px-3 py-2 text-left">ふりがな</th>
-                  <th className="px-3 py-2 text-left">メール</th>
-                  <th className="px-3 py-2 text-left">職種</th>
-                  <th className="px-3 py-2 text-left">部署</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-ink-700">
-                {rows.slice(0, 50).map((r, i) => (
-                  <tr key={i}>
-                    <td className="px-3 py-1.5 text-slate-700 dark:text-slate-200">{r.name || '—'}</td>
-                    <td className="px-3 py-1.5 text-slate-500">{r.furigana || '—'}</td>
-                    <td className="px-3 py-1.5 text-slate-500">{r.email || '—'}</td>
-                    <td className="px-3 py-1.5 text-slate-500">{r.job_type || '—'}</td>
-                    <td className="px-3 py-1.5 text-slate-500">{r.department || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={onClose}>キャンセル</Button>
-            <Button variant="primary" onClick={doImport} disabled={busy}>
-              <Upload className="w-4 h-4" />{busy ? '取込中...' : `${rows.length}件を取り込む`}
-            </Button>
-          </div>
-        </div>
-      )}
-    </ModalShell>
   )
 }
 
