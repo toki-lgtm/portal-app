@@ -38,6 +38,7 @@ const IMPORT_HEADER_MAP = {
   'メール': 'email', 'メールアドレス': 'email', 'email': 'email',
   '職種': 'job_type', 'job_type': 'job_type',
   '部署': 'department', '所属': 'department', 'department': 'department',
+  '会社': 'company', '会社名': 'company', 'company': 'company',
   '技能者id': 'skill_id', '技能者ID': 'skill_id', 'skill_id': 'skill_id',
   '性別': 'gender', 'gender': 'gender',
   '生年月日': 'birth_date', 'birth_date': 'birth_date',
@@ -69,6 +70,7 @@ export default function EmployeesPage({ onBack }) {
   const [canEdit, setCanEdit] = useState(false) // 社員一覧の管理者か
   const [search, setSearch] = useState('')
   const [deptFilter, setDeptFilter] = useState('')
+  const [companyFilter, setCompanyFilter] = useState('')
 
   const [editing, setEditing] = useState(null) // 編集中の社員 or {} (新規)
   const [showImport, setShowImport] = useState(false)
@@ -107,9 +109,13 @@ export default function EmployeesPage({ onBack }) {
     loadAll()
   }, [loadAll])
 
-  // 部署の一覧（フィルタ用）
+  // 部署・会社の一覧（フィルタ用）
   const departments = useMemo(
     () => [...new Set(employees.map((e) => e.department).filter(Boolean))].sort(),
+    [employees]
+  )
+  const companies = useMemo(
+    () => [...new Set(employees.map((e) => e.company).filter(Boolean))].sort(),
     [employees]
   )
 
@@ -118,11 +124,12 @@ export default function EmployeesPage({ onBack }) {
     const q = search.trim().toLowerCase()
     return employees.filter((e) => {
       if (deptFilter && e.department !== deptFilter) return false
+      if (companyFilter && e.company !== companyFilter) return false
       if (!q) return true
-      return [e.name, e.furigana, e.email, e.job_type, e.department]
+      return [e.name, e.furigana, e.email, e.job_type, e.department, e.company]
         .some((v) => v && String(v).toLowerCase().includes(q))
     })
-  }, [employees, search, deptFilter])
+  }, [employees, search, deptFilter, companyFilter])
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -155,6 +162,16 @@ export default function EmployeesPage({ onBack }) {
               className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
             />
           </div>
+          {companies.length > 0 && (
+            <select
+              value={companyFilter}
+              onChange={(e) => setCompanyFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            >
+              <option value="">全会社</option>
+              {companies.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
           <select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
@@ -192,6 +209,7 @@ export default function EmployeesPage({ onBack }) {
                 <thead>
                   <tr className="text-left text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-ink-700">
                     <th className="px-4 py-3 font-semibold">氏名</th>
+                    <th className="px-4 py-3 font-semibold hidden sm:table-cell">会社</th>
                     <th className="px-4 py-3 font-semibold hidden md:table-cell">職種 / 部署</th>
                     <th className="px-4 py-3 font-semibold hidden lg:table-cell">メール</th>
                     <th className="px-4 py-3 font-semibold">権限</th>
@@ -214,6 +232,9 @@ export default function EmployeesPage({ onBack }) {
                           )}
                         </div>
                         {e.furigana && <div className="text-xs text-slate-400">{e.furigana}</div>}
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell text-slate-600 dark:text-slate-300">
+                        {e.company || '—'}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-slate-600 dark:text-slate-300">
                         {e.job_type || '—'}
@@ -360,7 +381,7 @@ const inputCls = 'w-full px-3 py-2 rounded-xl border border-slate-200 dark:borde
 function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, showToast }) {
   const [tab, setTab] = useState('basic')
   const [form, setForm] = useState({
-    name: '', furigana: '', email: '', job_type: '', department: '',
+    name: '', furigana: '', email: '', job_type: '', department: '', company: '',
     skill_id: '', gender: '', birth_date: '', hire_date: '', phone: '',
     app_role: 'member', report_cc: false, is_active: true,
     ...sanitize(employee),
@@ -371,7 +392,7 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
   // null を空文字に直して input に渡せる形へ
   function sanitize(e) {
     const out = {}
-    for (const k of ['name', 'furigana', 'email', 'job_type', 'department', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'app_role']) {
+    for (const k of ['name', 'furigana', 'email', 'job_type', 'department', 'company', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'app_role']) {
       if (e[k] != null) out[k] = e[k]
     }
     if (e.report_cc != null) out.report_cc = e.report_cc
@@ -459,6 +480,7 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
             <Field label="ふりがな"><input className={inputCls} value={form.furigana} disabled={!canEdit} onChange={(e) => set('furigana', e.target.value)} /></Field>
             <Field label="メールアドレス"><input className={inputCls} type="email" value={form.email} disabled={!canEdit} onChange={(e) => set('email', e.target.value)} /></Field>
             <Field label="電話番号"><input className={inputCls} value={form.phone} disabled={!canEdit} onChange={(e) => set('phone', e.target.value)} /></Field>
+            <Field label="会社"><input className={inputCls} value={form.company} disabled={!canEdit} onChange={(e) => set('company', e.target.value)} /></Field>
             <Field label="職種"><input className={inputCls} value={form.job_type} disabled={!canEdit} onChange={(e) => set('job_type', e.target.value)} /></Field>
             <Field label="部署"><input className={inputCls} value={form.department} disabled={!canEdit} onChange={(e) => set('department', e.target.value)} /></Field>
             <Field label="技能者ID"><input className={inputCls} value={form.skill_id} disabled={!canEdit} onChange={(e) => set('skill_id', e.target.value)} /></Field>
