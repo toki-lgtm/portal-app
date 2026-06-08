@@ -169,6 +169,15 @@ export default function EmployeesPage({ onBack }) {
     () => [...new Set(employees.map((e) => e.company).filter(Boolean))].sort(),
     [employees]
   )
+  // 入力サジェスト用（過去に登録された値の候補）。会社/職種/部署。
+  const jobTypes = useMemo(
+    () => [...new Set(employees.map((e) => e.job_type).filter(Boolean))].sort(),
+    [employees]
+  )
+  const suggestions = useMemo(
+    () => ({ company: companies, job_type: jobTypes, department: departments }),
+    [companies, jobTypes, departments]
+  )
 
   // 検索・フィルタ適用
   const filtered = useMemo(() => {
@@ -362,6 +371,7 @@ export default function EmployeesPage({ onBack }) {
           isNew={!!editing._new}
           canEdit={canEdit}
           quals={quals}
+          suggestions={suggestions}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); loadAll() }}
           showToast={showToast}
@@ -463,7 +473,7 @@ function Field({ label, children }) {
 const inputCls = 'w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:opacity-60'
 
 // 社員詳細・編集モーダル（基本情報 / アプリ権限 / 資格）
-function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, showToast }) {
+function EmployeeModal({ employee, isNew, canEdit, quals, suggestions = {}, onClose, onSaved, showToast }) {
   const [tab, setTab] = useState('basic')
   const [form, setForm] = useState({
     name: '', furigana: '', email: '', job_type: '', department: '', company: '',
@@ -561,14 +571,18 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
       {/* 基本情報 */}
       {tab === 'basic' && (
         <div>
+          {/* 過去入力値のサジェスト候補（自由入力も可） */}
+          <datalist id="dl-company">{(suggestions.company || []).map((v) => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-job_type">{(suggestions.job_type || []).map((v) => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-department">{(suggestions.department || []).map((v) => <option key={v} value={v} />)}</datalist>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="氏名 *"><input className={inputCls} value={form.name} disabled={!canEdit} onChange={(e) => set('name', e.target.value)} /></Field>
             <Field label="ふりがな"><input className={inputCls} value={form.furigana} disabled={!canEdit} onChange={(e) => set('furigana', e.target.value)} /></Field>
             <Field label="メールアドレス"><input className={inputCls} type="email" value={form.email} disabled={!canEdit} onChange={(e) => set('email', e.target.value)} /></Field>
             <Field label="電話番号"><input className={inputCls} value={form.phone} disabled={!canEdit} onChange={(e) => set('phone', e.target.value)} /></Field>
-            <Field label="会社"><input className={inputCls} value={form.company} disabled={!canEdit} onChange={(e) => set('company', e.target.value)} /></Field>
-            <Field label="職種"><input className={inputCls} value={form.job_type} disabled={!canEdit} onChange={(e) => set('job_type', e.target.value)} /></Field>
-            <Field label="部署"><input className={inputCls} value={form.department} disabled={!canEdit} onChange={(e) => set('department', e.target.value)} /></Field>
+            <Field label="会社"><input className={inputCls} list="dl-company" value={form.company} disabled={!canEdit} onChange={(e) => set('company', e.target.value)} /></Field>
+            <Field label="職種"><input className={inputCls} list="dl-job_type" value={form.job_type} disabled={!canEdit} onChange={(e) => set('job_type', e.target.value)} /></Field>
+            <Field label="部署"><input className={inputCls} list="dl-department" value={form.department} disabled={!canEdit} onChange={(e) => set('department', e.target.value)} /></Field>
             <Field label="技能者ID"><input className={inputCls} value={form.skill_id} disabled={!canEdit} onChange={(e) => set('skill_id', e.target.value)} /></Field>
             <Field label="性別">
               <select className={inputCls} value={form.gender} disabled={!canEdit} onChange={(e) => set('gender', e.target.value)}>
