@@ -39,6 +39,8 @@ const IMPORT_HEADER_MAP = {
   '職種': 'job_type', 'job_type': 'job_type',
   '部署': 'department', '所属': 'department', 'department': 'department',
   '会社': 'company', '会社名': 'company', 'company': 'company',
+  '住所': 'address', 'address': 'address',
+  '郵便番号': 'postal_code', '〒': 'postal_code', 'postal_code': 'postal_code',
   '技能者id': 'skill_id', '技能者ID': 'skill_id', 'skill_id': 'skill_id',
   '性別': 'gender', 'gender': 'gender',
   '生年月日': 'birth_date', 'birth_date': 'birth_date',
@@ -50,6 +52,18 @@ const IMPORT_HEADER_MAP = {
 function authConfig() {
   const token = localStorage.getItem('authToken')
   return { headers: { Authorization: `Bearer ${token}` } }
+}
+
+// 入社日から勤続年数（満年数）を計算。日付不正/未設定なら null。
+function yearsOfService(hireDate) {
+  if (!hireDate) return null
+  const h = new Date(hireDate)
+  if (isNaN(h)) return null
+  const now = new Date()
+  let y = now.getFullYear() - h.getFullYear()
+  const m = now.getMonth() - h.getMonth()
+  if (m < 0 || (m === 0 && now.getDate() < h.getDate())) y--
+  return y < 0 ? null : y
 }
 
 // 有効期限の状態を返す: 'expired' | 'soon'(90日以内) | 'ok' | null(期限なし)
@@ -210,8 +224,10 @@ export default function EmployeesPage({ onBack }) {
                   <tr className="text-left text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-ink-700">
                     <th className="px-4 py-3 font-semibold">氏名</th>
                     <th className="px-4 py-3 font-semibold hidden sm:table-cell">会社</th>
-                    <th className="px-4 py-3 font-semibold hidden md:table-cell">職種 / 部署</th>
-                    <th className="px-4 py-3 font-semibold hidden lg:table-cell">メール</th>
+                    <th className="px-4 py-3 font-semibold hidden md:table-cell">電話</th>
+                    <th className="px-4 py-3 font-semibold hidden lg:table-cell">職種 / 部署</th>
+                    <th className="px-4 py-3 font-semibold hidden lg:table-cell">入社日 / 勤続</th>
+                    <th className="px-4 py-3 font-semibold hidden xl:table-cell">メール</th>
                     <th className="px-4 py-3 font-semibold">権限</th>
                     <th className="px-4 py-3 font-semibold">資格</th>
                     <th className="px-4 py-3"></th>
@@ -236,11 +252,18 @@ export default function EmployeesPage({ onBack }) {
                       <td className="px-4 py-3 hidden sm:table-cell text-slate-600 dark:text-slate-300">
                         {e.company || '—'}
                       </td>
-                      <td className="px-4 py-3 hidden md:table-cell text-slate-600 dark:text-slate-300">
+                      <td className="px-4 py-3 hidden md:table-cell text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                        {e.phone || '—'}
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell text-slate-600 dark:text-slate-300">
                         {e.job_type || '—'}
                         {e.department && <span className="text-slate-400"> / {e.department}</span>}
                       </td>
-                      <td className="px-4 py-3 hidden lg:table-cell text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
+                      <td className="px-4 py-3 hidden lg:table-cell text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                        {e.hire_date || '—'}
+                        {yearsOfService(e.hire_date) != null && <span className="text-slate-400"> ・ {yearsOfService(e.hire_date)}年</span>}
+                      </td>
+                      <td className="px-4 py-3 hidden xl:table-cell text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
                         {e.email || '—'}
                       </td>
                       <td className="px-4 py-3">
@@ -383,6 +406,7 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
   const [form, setForm] = useState({
     name: '', furigana: '', email: '', job_type: '', department: '', company: '',
     skill_id: '', gender: '', birth_date: '', hire_date: '', phone: '',
+    postal_code: '', address: '',
     app_role: 'member', report_cc: false, is_active: true,
     ...sanitize(employee),
   })
@@ -392,7 +416,7 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
   // null を空文字に直して input に渡せる形へ
   function sanitize(e) {
     const out = {}
-    for (const k of ['name', 'furigana', 'email', 'job_type', 'department', 'company', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'app_role']) {
+    for (const k of ['name', 'furigana', 'email', 'job_type', 'department', 'company', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'postal_code', 'address', 'app_role']) {
       if (e[k] != null) out[k] = e[k]
     }
     if (e.report_cc != null) out.report_cc = e.report_cc
@@ -491,6 +515,11 @@ function EmployeeModal({ employee, isNew, canEdit, quals, onClose, onSaved, show
             </Field>
             <Field label="生年月日"><input className={inputCls} type="date" value={form.birth_date} disabled={!canEdit} onChange={(e) => set('birth_date', e.target.value)} /></Field>
             <Field label="雇入年月日"><input className={inputCls} type="date" value={form.hire_date} disabled={!canEdit} onChange={(e) => set('hire_date', e.target.value)} /></Field>
+            <Field label="勤続年数"><input className={inputCls} value={yearsOfService(form.hire_date) != null ? `${yearsOfService(form.hire_date)} 年` : '—'} disabled readOnly /></Field>
+            <Field label="郵便番号"><input className={inputCls} value={form.postal_code} disabled={!canEdit} onChange={(e) => set('postal_code', e.target.value)} /></Field>
+            <div className="sm:col-span-2">
+              <Field label="住所"><input className={inputCls} value={form.address} disabled={!canEdit} onChange={(e) => set('address', e.target.value)} /></Field>
+            </div>
           </div>
           <div className="flex flex-wrap gap-5 mt-4">
             <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
