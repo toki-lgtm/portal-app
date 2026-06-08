@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google'
 import {
@@ -10,13 +10,18 @@ import {
   CheckCircle2,
   Wrench,
   Hourglass,
-  TrendingUp,
   Activity,
+  Settings,
+  Bell,
+  Star,
+  Pin,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
 import Card from './components/ui/Card'
 import ThemeToggle from './components/ui/ThemeToggle'
+import SettingsPage from './components/SettingsPage'
+import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
 const ICON_TONES = [
@@ -25,6 +30,47 @@ const ICON_TONES = [
   'bg-accent-50 dark:bg-accent-500/15 text-accent-600 dark:text-accent-400',
   'bg-warning-50 dark:bg-warning-500/15 text-warning-600 dark:text-warning-400',
 ]
+
+/**
+ * デフォルトのサーバー設定値。GET 失敗時のフォールバックとして使用。
+ */
+const DEFAULT_SERVER_SETTINGS = {
+  apps: { pinned: [], favorites: [], order: [], show_kpi: true },
+  notifications: { in_app_enabled: true, email_enabled: false, email_weekdays: [1,2,3,4,5], email_hour: 8 },
+}
+
+/**
+ * rawApps をサーバー設定（pinned/favorites/order）に基づいて並び替える。
+ * ピン留め優先 → 保存 order 順 → 残りは元順。
+ */
+function sortAppsWithSettings(rawList, serverSettings) {
+  const { pinned = [], favorites = [], order = [] } = serverSettings?.apps || {}
+  const pinnedSet = new Set(pinned.map(String))
+  const favSet = new Set(favorites.map(String))
+
+  // サーバーの order 配列で並べ替え（order にないものは末尾）
+  const ordered = [...rawList].sort((a, b) => {
+    const ia = order.indexOf(String(a.id))
+    const ib = order.indexOf(String(b.id))
+    if (ia === -1 && ib === -1) return 0
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+
+  // ピン留め優先で再ソート
+  ordered.sort((a, b) => {
+    const pa = pinnedSet.has(String(a.id)) ? 0 : 1
+    const pb = pinnedSet.has(String(b.id)) ? 0 : 1
+    return pa - pb
+  })
+
+  return ordered.map((app) => ({
+    ...app,
+    pinned: pinnedSet.has(String(app.id)),
+    favorite: favSet.has(String(app.id)),
+  }))
+}
 
 function LoginPage({ onLoginSuccess }) {
   const [isLoading, setIsLoading] = useState(false)
@@ -206,7 +252,104 @@ function RecentActivity({ recent }) {
   )
 }
 
-function DashboardPage({ user, onLogout, apps, loading, stats }) {
+/**
+ * 通知ベルドロップダウン。
+ * stats の awaiting_approval / issues_open を流用（新規API呼び出しなし）。
+ */
+function NotificationBell({ stats, apps }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  // ドロップダウン外クリックで閉じる
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const badgeCount = (stats?.awaiting_approval || 0) + (stats?.issues_open || 0)
+
+  // 安全パトロールアプリの URL を apps から探す（名前で判定）
+  const patrolApp = apps?.find(
+    (a) => a.name && a.name.includes('安全') && a.url
+  )
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="通知"
+        className="relative w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-800 transition"
+      >
+        <Bell className="w-5 h-5" />
+        {badgeCount > 0 && (
+          <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-accent-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+            {badgeCount > 9 ? '9+' : badgeCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-12 w-72 bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 rounded-2xl shadow-xl z-20 p-4">
+          <p className="text-sm font-bold text-slate-900 dark:text-white mb-3">通知</p>
+          {badgeCount === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-4">新しい通知はありません</p>
+          ) : (
+            <ul className="space-y-2">
+              {(stats?.awaiting_approval || 0) > 0 && (
+                <li className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <Hourglass className="w-4 h-4 text-accent-500 shrink-0" />
+                    <span className="text-slate-700 dark:text-slate-300">承認待ち</span>
+                  </div>
+                  <span className="font-bold text-accent-600 dark:text-accent-400">
+                    {stats.awaiting_approval} 件
+                  </span>
+                </li>
+              )}
+              {(stats?.issues_open || 0) > 0 && (
+                <li className="flex items-center justify-between text-sm">
+                  <div className="flex items-center gap-2">
+                    <Wrench className="w-4 h-4 text-warning-500 shrink-0" />
+                    <span className="text-slate-700 dark:text-slate-300">是正対応中</span>
+                  </div>
+                  <span className="font-bold text-warning-600 dark:text-warning-400">
+                    {stats.issues_open} 件
+                  </span>
+                </li>
+              )}
+            </ul>
+          )}
+          {patrolApp && (
+            <a
+              href={patrolApp.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline"
+            >
+              安全パトロールを開く
+              <ArrowRight className="w-3 h-3" />
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * ダッシュボードページ。
+ * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
+ */
+function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings }) {
+  const showKpi = serverSettings?.apps?.show_kpi !== false
+  const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
+
+  // アプリを設定順で並び替え
+  const sortedApps = loading ? apps : sortAppsWithSettings(apps, serverSettings)
+
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
       {/* ヘッダー */}
@@ -232,7 +375,23 @@ function DashboardPage({ user, onLogout, apps, loading, stats }) {
             <span className="hidden sm:block text-sm text-slate-600 dark:text-slate-300 max-w-[200px] truncate">
               {user?.email}
             </span>
+
+            {/* 通知ベル（in_app_enabled のときのみ表示） */}
+            {inAppEnabled && stats && (
+              <NotificationBell stats={stats} apps={apps} />
+            )}
+
             <ThemeToggle />
+
+            {/* 設定ボタン */}
+            <button
+              onClick={onOpenSettings}
+              aria-label="個人設定"
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-800 transition"
+            >
+              <Settings className="w-5 h-5" />
+            </button>
+
             <Button variant="danger" size="sm" onClick={onLogout}>
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:inline">ログアウト</span>
@@ -250,8 +409,8 @@ function DashboardPage({ user, onLogout, apps, loading, stats }) {
           </div>
         ) : (
           <>
-            {/* 安全パトロール状況サマリ（取得できた場合のみ表示） */}
-            {stats && (
+            {/* 安全パトロール状況サマリ（show_kpi && statsが取得できた場合のみ表示） */}
+            {showKpi && stats && (
               <div className="mb-2">
                 <div className="flex items-center gap-2 mb-4">
                   <ShieldCheck className="w-5 h-5 text-brand-500" />
@@ -267,7 +426,7 @@ function DashboardPage({ user, onLogout, apps, loading, stats }) {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {apps.map((app, idx) => {
+              {sortedApps.map((app, idx) => {
                 const isComingSoon = app.status === 'coming_soon'
                 const tone = ICON_TONES[idx % ICON_TONES.length]
 
@@ -298,8 +457,18 @@ function DashboardPage({ user, onLogout, apps, loading, stats }) {
                     href={app.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block"
+                    className="group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block relative"
                   >
+                    {/* ピン留め・お気に入りアイコン */}
+                    <div className="absolute top-3 right-3 flex gap-1">
+                      {app.favorite && (
+                        <Star className="w-3.5 h-3.5 text-warning-400" fill="currentColor" />
+                      )}
+                      {app.pinned && (
+                        <Pin className="w-3.5 h-3.5 text-accent-400" />
+                      )}
+                    </div>
+
                     <div
                       className={`w-12 h-12 rounded-xl ${tone} flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition`}
                     >
@@ -317,14 +486,14 @@ function DashboardPage({ user, onLogout, apps, loading, stats }) {
               })}
             </div>
 
-            {apps.length === 0 && (
+            {sortedApps.length === 0 && (
               <div className="text-center py-16 text-slate-400 dark:text-slate-500">
                 利用可能なアプリがありません
               </div>
             )}
 
-            {/* 最近の点検（取得できた場合のみ表示） */}
-            {stats && (
+            {/* 最近の点検（show_kpi && statsが取得できた場合のみ表示） */}
+            {showKpi && stats && (
               <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
                 <div className="lg:col-span-2">
                   <RecentActivity recent={stats.recent || []} />
@@ -359,6 +528,21 @@ function AppContent() {
   const [apps, setApps] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
+  // サーバーから取得したユーザー設定。取得失敗時はデフォルト値を使う
+  const [serverSettings, setServerSettings] = useState(DEFAULT_SERVER_SETTINGS)
+  // 'dashboard' | 'settings'
+  const [view, setView] = useState('dashboard')
+
+  // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
+  useEffect(() => {
+    applyTheme(loadTheme())
+  }, [])
+
+  // 文字サイズの初期適用
+  useEffect(() => {
+    const fs = localStorage.getItem('fontSize')
+    if (fs === 'large') document.documentElement.classList.add('text-lg-base')
+  }, [])
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user')
@@ -402,8 +586,21 @@ function AppContent() {
       }
     }
 
+    // ユーザー設定を取得。失敗時はデフォルト値でフォールバック
+    const fetchUserSettings = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/user/settings`, authConfig)
+        setServerSettings(response.data)
+      } catch (error) {
+        console.error('Failed to fetch user settings:', error)
+        // 401/403 はここでは logout せず（apps 側で処理済みのため）
+        setServerSettings(DEFAULT_SERVER_SETTINGS)
+      }
+    }
+
     fetchApps()
     fetchStats()
+    fetchUserSettings()
   }, [user])
 
   const handleLogout = () => {
@@ -412,10 +609,30 @@ function AppContent() {
     setUser(null)
     setApps([])
     setStats(null)
+    setServerSettings(DEFAULT_SERVER_SETTINGS)
+    setView('dashboard')
+  }
+
+  /**
+   * SettingsPage から保存成功時に呼ばれるコールバック。
+   * サーバー返却の最新設定をステートに反映し、ダッシュボードの表示を更新する。
+   */
+  const handleSettingsChange = (newServerSettings) => {
+    setServerSettings(newServerSettings)
   }
 
   if (!user) {
     return <LoginPage onLoginSuccess={setUser} />
+  }
+
+  if (view === 'settings') {
+    return (
+      <SettingsPage
+        onBack={() => setView('dashboard')}
+        apps={apps}
+        onSettingsChange={handleSettingsChange}
+      />
+    )
   }
 
   return (
@@ -425,6 +642,8 @@ function AppContent() {
       apps={apps}
       loading={loading}
       stats={stats}
+      serverSettings={serverSettings}
+      onOpenSettings={() => setView('settings')}
     />
   )
 }

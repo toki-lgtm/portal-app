@@ -1,21 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Sun, Moon } from 'lucide-react'
+import { saveTheme } from '../../lib/theme'
 
-// ライト/ダーク切替。選択は localStorage に保存（既定はダーク）
+/**
+ * ヘッダー用テーマ切替ボタン。
+ * dark ⇄ light を明示的に切り替える。3値のラジオ選択は設定画面で提供。
+ */
 export default function ThemeToggle({ className = '' }) {
   const [isDark, setIsDark] = useState(
     () => document.documentElement.classList.contains('dark')
   )
 
   useEffect(() => {
-    const root = document.documentElement
-    if (isDark) {
-      root.classList.add('dark')
-      localStorage.setItem('theme', 'dark')
-    } else {
-      root.classList.remove('dark')
-      localStorage.setItem('theme', 'light')
-    }
+    // dark/light を明示保存。system モードから脱して固定する
+    saveTheme(isDark ? 'dark' : 'light')
   }, [isDark])
 
   return (

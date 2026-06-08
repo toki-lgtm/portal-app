@@ -24,3 +24,8 @@ body {
 .dark body {
   @apply bg-ink-950 text-slate-200;
 }
+
+/* 文字サイズ「大きめ」: 設定画面で選択時に html に付与 */
+.text-lg-base {
+  font-size: 18px;
+}
