@@ -1,15 +1,30 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google'
+import {
+  LogOut,
+  ArrowRight,
+  Clock,
+  ShieldCheck,
+  ClipboardCheck,
+  CheckCircle2,
+  Wrench,
+  Hourglass,
+  TrendingUp,
+  Activity,
+} from 'lucide-react'
+import Button from './components/ui/Button'
+import Badge from './components/ui/Badge'
+import Card from './components/ui/Card'
+import ThemeToggle from './components/ui/ThemeToggle'
 
-const appColors = {
-  1: { bg: 'from-blue-500 to-blue-600', light: 'bg-blue-50' },
-  2: { bg: 'from-purple-500 to-purple-600', light: 'bg-purple-50' },
-  3: { bg: 'from-pink-500 to-pink-600', light: 'bg-pink-50' },
-  4: { bg: 'from-green-500 to-green-600', light: 'bg-green-50' },
-  5: { bg: 'from-yellow-500 to-yellow-600', light: 'bg-yellow-50' },
-  6: { bg: 'from-indigo-500 to-indigo-600', light: 'bg-indigo-50' },
-}
+// アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
+const ICON_TONES = [
+  'bg-brand-50 dark:bg-brand-500/15 text-brand-600 dark:text-brand-400',
+  'bg-success-50 dark:bg-success-500/15 text-success-600 dark:text-success-400',
+  'bg-accent-50 dark:bg-accent-500/15 text-accent-600 dark:text-accent-400',
+  'bg-warning-50 dark:bg-warning-500/15 text-warning-600 dark:text-warning-400',
+]
 
 function LoginPage({ onLoginSuccess }) {
   const [isLoading, setIsLoading] = useState(false)
@@ -41,22 +56,28 @@ function LoginPage({ onLoginSuccess }) {
   })
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex items-center justify-center px-4">
+    <div className="min-h-screen bg-slate-100 dark:bg-ink-950 flex items-center justify-center px-4 transition-colors">
+      <div className="fixed top-5 right-5">
+        <ThemeToggle />
+      </div>
       <div className="max-w-md w-full">
-        <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
+        <div className="bg-white dark:bg-ink-800 rounded-2xl shadow-xl border border-slate-200 dark:border-ink-700 p-8 text-center">
+          <div className="w-14 h-14 mx-auto mb-5 rounded-2xl bg-brand-600 flex items-center justify-center">
+            <ShieldCheck className="w-7 h-7 text-white" />
+          </div>
           <div className="mb-6">
-            <h1 className="text-4xl font-bold text-slate-900 mb-2">社内ポータル</h1>
-            <p className="text-slate-500">中原建設</p>
+            <h1 className="text-3xl font-black text-slate-900 dark:text-white mb-1">社内ポータル</h1>
+            <p className="text-slate-500 dark:text-slate-400">中原建設</p>
           </div>
 
-          <p className="text-slate-600 mb-8">
+          <p className="text-slate-600 dark:text-slate-300 mb-8">
             Google アカウントでログインしてください
           </p>
 
           <button
             onClick={() => login()}
             disabled={isLoading}
-            className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white dark:bg-ink-700 border border-slate-300 dark:border-ink-600 text-slate-700 dark:text-slate-100 rounded-xl hover:bg-slate-50 dark:hover:bg-ink-600 transition disabled:opacity-50"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -67,7 +88,7 @@ function LoginPage({ onLoginSuccess }) {
             {isLoading ? 'ログイン中...' : 'Google でログイン'}
           </button>
 
-          <p className="text-xs text-slate-500 mt-6">
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-6">
             Google Workspace アカウントでログインしてください
           </p>
         </div>
@@ -76,204 +97,257 @@ function LoginPage({ onLoginSuccess }) {
   )
 }
 
-function DashboardPage({ user, onLogout, apps, loading, hoveredApp, setHoveredApp }) {
-  const getAppColor = (appId) => appColors[appId] || appColors[1]
-
+// KPIカード（数字＋ラベル＋補足）
+function StatCard({ icon: Icon, iconClass, label, value, unit, sub }) {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100">
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm text-slate-500 dark:text-slate-400">{label}</span>
+        <Icon className={`w-5 h-5 ${iconClass}`} />
+      </div>
+      <p className="text-3xl font-extrabold text-slate-900 dark:text-white tabular-nums">
+        {value}
+        {unit && <span className="text-base font-medium text-slate-400 ml-1">{unit}</span>}
+      </p>
+      {sub && <div className="mt-1 text-xs">{sub}</div>}
+    </Card>
+  )
+}
+
+function StatsSection({ stats }) {
+  const rate = stats.completion_rate
+  return (
+    <section className="mb-8">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          icon={ClipboardCheck}
+          iconClass="text-brand-500"
+          label="今月の点検"
+          value={stats.inspections_this_month}
+          unit="件"
+          sub={
+            <span className="text-slate-400">累計 {stats.inspections_total} 件</span>
+          }
+        />
+        <StatCard
+          icon={CheckCircle2}
+          iconClass="text-success-500"
+          label="是正完了率"
+          value={rate == null ? '—' : rate}
+          unit={rate == null ? '' : '%'}
+          sub={
+            rate == null ? (
+              <span className="text-slate-400">指摘なし</span>
+            ) : (
+              <div className="mt-1 h-1.5 rounded-full bg-slate-100 dark:bg-ink-700 overflow-hidden">
+                <div className="h-full bg-success-500 rounded-full" style={{ width: `${rate}%` }} />
+              </div>
+            )
+          }
+        />
+        <StatCard
+          icon={Wrench}
+          iconClass="text-warning-500"
+          label="是正対応中"
+          value={stats.issues_open}
+          unit="件"
+          sub={<span className="text-slate-400">未承認の指摘</span>}
+        />
+        <StatCard
+          icon={Hourglass}
+          iconClass="text-accent-500"
+          label="承認待ち"
+          value={stats.awaiting_approval}
+          unit="件"
+          sub={<span className="text-slate-400">是正写真の承認</span>}
+        />
+      </div>
+    </section>
+  )
+}
+
+function RecentActivity({ recent }) {
+  const fmt = (d) => {
+    if (!d) return ''
+    const dt = new Date(d)
+    return `${dt.getMonth() + 1}/${dt.getDate()}`
+  }
+  return (
+    <Card className="p-6 h-full">
+      <div className="flex items-center gap-2 mb-4">
+        <Activity className="w-5 h-5 text-brand-500" />
+        <h2 className="font-bold text-slate-900 dark:text-white">最近の点検</h2>
+      </div>
+      {recent.length === 0 ? (
+        <p className="text-sm text-slate-400 py-6 text-center">まだ点検記録がありません</p>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-ink-700">
+          {recent.map((r) => {
+            const tone = r.open_issues > 0 ? 'danger' : r.issues > 0 ? 'success' : 'neutral'
+            const label =
+              r.open_issues > 0
+                ? `是正中 ${r.open_issues}件`
+                : r.issues > 0
+                ? '是正済'
+                : '指摘なし'
+            return (
+              <li key={r.id} className="flex items-center gap-3 py-3">
+                <span className="text-xs text-slate-400 w-10 shrink-0 tabular-nums">{fmt(r.inspection_date)}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">{r.project_name}</p>
+                </div>
+                <Badge tone={tone}>{label}</Badge>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+function DashboardPage({ user, onLogout, apps, loading, stats }) {
+  return (
+    <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
       {/* ヘッダー */}
-      <header className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-12">
-          <div className="flex items-baseline justify-between">
-            <div>
-              <h1 className="text-4xl font-bold text-slate-900">
-                社内ポータル
-              </h1>
-              <p className="text-slate-500 mt-2 text-lg">中原建設</p>
+      <header className="bg-white/80 dark:bg-ink-900/80 backdrop-blur border-b border-slate-200 dark:border-ink-800 sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center font-black text-white shrink-0">
+              中
             </div>
-            <div className="text-right">
-              <p className="text-slate-600 text-sm mb-2">
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold text-slate-900 dark:text-white leading-tight">社内ポータル</h1>
+              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                中原建設 ・{' '}
                 {new Date().toLocaleDateString('ja-JP', {
                   year: 'numeric',
                   month: 'long',
-                  day: 'numeric'
+                  day: 'numeric',
                 })}
               </p>
-              <div className="flex items-center gap-3">
-                <span className="text-slate-600">{user?.email}</span>
-                <button
-                  onClick={onLogout}
-                  className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-sm font-medium transition"
-                >
-                  ログアウト
-                </button>
-              </div>
             </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="hidden sm:block text-sm text-slate-600 dark:text-slate-300 max-w-[200px] truncate">
+              {user?.email}
+            </span>
+            <ThemeToggle />
+            <Button variant="danger" size="sm" onClick={onLogout}>
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">ログアウト</span>
+            </Button>
           </div>
         </div>
       </header>
 
-      {/* メインコンテンツ */}
-      <main className="max-w-7xl mx-auto px-6 py-16">
+      {/* メイン */}
+      <main className="max-w-6xl mx-auto px-6 py-10">
         {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-            </div>
-            <p className="text-slate-600 mt-4">読み込み中...</p>
+          <div className="text-center py-20">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-brand-600"></div>
+            <p className="text-slate-500 dark:text-slate-400 mt-4">読み込み中...</p>
           </div>
         ) : (
           <>
-            {/* アプリセクション */}
-            <div className="mb-8">
-              <h2 className="text-2xl font-bold text-slate-900 mb-2">
-                利用可能なアプリ
-              </h2>
-              <p className="text-slate-600">
-                必要なツールにアクセスできます
-              </p>
+            {/* 安全パトロール状況サマリ（取得できた場合のみ表示） */}
+            {stats && (
+              <div className="mb-2">
+                <div className="flex items-center gap-2 mb-4">
+                  <ShieldCheck className="w-5 h-5 text-brand-500" />
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">安全パトロール状況</h2>
+                </div>
+                <StatsSection stats={stats} />
+              </div>
+            )}
+
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white">利用可能なアプリ</h2>
+              <p className="text-slate-500 dark:text-slate-400 mt-1">必要なツールにアクセスできます</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {apps.map((app) => {
-                const colors = getAppColor(app.id)
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {apps.map((app, idx) => {
                 const isComingSoon = app.status === 'coming_soon'
+                const tone = ICON_TONES[idx % ICON_TONES.length]
 
-                return (
-                  <div
-                    key={app.id}
-                    onMouseEnter={() => setHoveredApp(app.id)}
-                    onMouseLeave={() => setHoveredApp(null)}
-                    className={`group relative overflow-hidden rounded-2xl transition-all duration-300 ${
-                      isComingSoon
-                        ? 'opacity-70 cursor-not-allowed'
-                        : 'cursor-pointer hover:shadow-2xl'
-                    }`}
-                  >
-                    {/* グラデーション背景 */}
+                if (isComingSoon) {
+                  return (
                     <div
-                      className={`absolute inset-0 bg-gradient-to-br ${colors.bg} ${
-                        hoveredApp === app.id && !isComingSoon
-                          ? 'opacity-100'
-                          : 'opacity-0'
-                      } transition-opacity duration-300`}
-                    />
-
-                    {/* カード本体 */}
-                    <div
-                      className={`relative bg-white p-8 transition-all duration-300 ${
-                        hoveredApp === app.id && !isComingSoon
-                          ? 'translate-y-0'
-                          : ''
-                      }`}
+                      key={app.id}
+                      className="bg-slate-50 dark:bg-ink-800/50 rounded-2xl border border-dashed border-slate-300 dark:border-ink-700 p-6 opacity-80"
                     >
-                      {/* アイコン背景 */}
-                      <div
-                        className={`${colors.light} w-16 h-16 rounded-xl flex items-center justify-center mb-4 text-3xl group-hover:scale-110 transition-transform duration-300`}
-                      >
+                      <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-ink-700 text-slate-400 flex items-center justify-center mb-4 text-2xl">
                         {app.icon}
                       </div>
-
-                      {/* テキスト */}
-                      <h3 className="text-xl font-bold text-slate-900 mb-2">
-                        {app.name}
-                      </h3>
-                      <p className="text-slate-600 text-sm mb-6">
-                        {app.description || 'アプリケーションにアクセス'}
+                      <h3 className="font-bold text-slate-500 dark:text-slate-400 mb-1">{app.name}</h3>
+                      <p className="text-sm text-slate-400 dark:text-slate-500 mb-4">
+                        {app.description || 'アプリケーション'}
                       </p>
-
-                      {/* ボタン */}
-                      {isComingSoon ? (
-                        <div className="inline-flex items-center px-4 py-2 bg-slate-200 text-slate-600 rounded-lg text-sm font-medium cursor-not-allowed">
-                          <span className="mr-2">⏱️</span>
-                          近日公開
-                        </div>
-                      ) : (
-                        <a
-                          href={app.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={`inline-flex items-center px-6 py-3 bg-gradient-to-r ${colors.bg} text-white rounded-lg text-sm font-semibold hover:shadow-lg transition-all duration-300 group-hover:translate-x-1`}
-                        >
-                          アクセス
-                          <span className="ml-2">→</span>
-                        </a>
-                      )}
-
-                      {/* ホバー時のオーバーレイテキスト */}
-                      {!isComingSoon && (
-                        <div
-                          className={`absolute inset-0 bg-gradient-to-br ${colors.bg} rounded-2xl p-8 flex flex-col justify-between transition-opacity duration-300 ${
-                            hoveredApp === app.id
-                              ? 'opacity-100'
-                              : 'opacity-0 pointer-events-none'
-                          }`}
-                        >
-                          <div>
-                            <div className="text-5xl mb-4">{app.icon}</div>
-                            <h3 className="text-2xl font-bold text-white mb-2">
-                              {app.name}
-                            </h3>
-                            <p className="text-white text-opacity-90">
-                              {app.description ||
-                                '本アプリケーションをクリックしてアクセス'}
-                            </p>
-                          </div>
-                          <a
-                            href={app.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center px-6 py-3 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg text-sm font-semibold backdrop-blur-sm transition-all duration-300"
-                          >
-                            今すぐアクセス
-                            <span className="ml-2">→</span>
-                          </a>
-                        </div>
-                      )}
+                      <Badge tone="neutral">
+                        <Clock className="w-3.5 h-3.5" />
+                        近日公開
+                      </Badge>
                     </div>
-                  </div>
+                  )
+                }
+
+                return (
+                  <a
+                    key={app.id}
+                    href={app.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block"
+                  >
+                    <div
+                      className={`w-12 h-12 rounded-xl ${tone} flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition`}
+                    >
+                      {app.icon}
+                    </div>
+                    <h3 className="font-bold text-slate-900 dark:text-white mb-1">{app.name}</h3>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+                      {app.description || 'アプリケーションにアクセス'}
+                    </p>
+                    <span className="inline-flex items-center gap-1 text-sm font-semibold text-brand-600 dark:text-brand-400 group-hover:gap-2 transition-all">
+                      開く <ArrowRight className="w-4 h-4" />
+                    </span>
+                  </a>
                 )
               })}
             </div>
+
+            {apps.length === 0 && (
+              <div className="text-center py-16 text-slate-400 dark:text-slate-500">
+                利用可能なアプリがありません
+              </div>
+            )}
+
+            {/* 最近の点検（取得できた場合のみ表示） */}
+            {stats && (
+              <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
+                <div className="lg:col-span-2">
+                  <RecentActivity recent={stats.recent || []} />
+                </div>
+                <div className="bg-gradient-to-br from-brand-700 to-brand-900 dark:from-brand-800 dark:to-ink-900 rounded-2xl p-6 text-white flex flex-col border border-transparent dark:border-ink-700">
+                  <ShieldCheck className="w-8 h-8 mb-3 text-accent-400" />
+                  <h3 className="font-bold text-lg mb-1">安全第一</h3>
+                  <p className="text-brand-100 dark:text-slate-300 text-sm flex-1">
+                    {stats.issues_open > 0
+                      ? `現在 ${stats.issues_open} 件の是正対応が進行中です。期限管理を徹底しましょう。`
+                      : '未対応の是正はありません。引き続き安全管理を継続しましょう。'}
+                  </p>
+                </div>
+              </section>
+            )}
           </>
         )}
       </main>
 
       {/* フッター */}
-      <footer className="bg-white border-t border-slate-200 mt-20">
-        <div className="max-w-7xl mx-auto px-6 py-8">
-          <div className="grid grid-cols-3 gap-8 mb-8">
-            <div>
-              <h4 className="font-semibold text-slate-900 mb-3">中原建設</h4>
-              <p className="text-slate-600 text-sm">
-                社内ポータルで業務を効率化
-              </p>
-            </div>
-            <div>
-              <h4 className="font-semibold text-slate-900 mb-3">クイックリンク</h4>
-              <ul className="text-sm text-slate-600 space-y-1">
-                <li>
-                  <a href="#" className="hover:text-slate-900 transition">
-                    ヘルプ
-                  </a>
-                </li>
-                <li>
-                  <a href="#" className="hover:text-slate-900 transition">
-                    サポート
-                  </a>
-                </li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold text-slate-900 mb-3">サポート</h4>
-              <p className="text-slate-600 text-sm">
-                問題が発生した場合はお知らせください
-              </p>
-            </div>
-          </div>
-          <div className="border-t border-slate-200 pt-8 text-center text-slate-600 text-sm">
-            <p>&copy; 2026 中原建設. All rights reserved.</p>
-          </div>
+      <footer className="border-t border-slate-200 dark:border-ink-800 mt-10">
+        <div className="max-w-6xl mx-auto px-6 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
+          &copy; 2026 中原建設 ・ 社内ポータルで業務を効率化
         </div>
       </footer>
     </div>
@@ -283,8 +357,8 @@ function DashboardPage({ user, onLogout, apps, loading, hoveredApp, setHoveredAp
 function AppContent() {
   const [user, setUser] = useState(null)
   const [apps, setApps] = useState([])
+  const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [hoveredApp, setHoveredApp] = useState(null)
 
   useEffect(() => {
     const savedUser = localStorage.getItem('user')
@@ -299,13 +373,13 @@ function AppContent() {
       return
     }
 
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const token = localStorage.getItem('authToken')
+    const authConfig = { headers: { Authorization: `Bearer ${token}` } }
+
     const fetchApps = async () => {
       try {
-        const token = localStorage.getItem('authToken')
-        const response = await axios.get(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/apps`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        )
+        const response = await axios.get(`${apiUrl}/api/apps`, authConfig)
         setApps(response.data)
       } catch (error) {
         console.error('Failed to fetch apps:', error)
@@ -317,7 +391,19 @@ function AppContent() {
         setLoading(false)
       }
     }
+
+    // 統計は補助情報。失敗してもアプリ一覧の表示は妨げない
+    const fetchStats = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/dashboard/stats`, authConfig)
+        setStats(response.data)
+      } catch (error) {
+        console.error('Failed to fetch dashboard stats:', error)
+      }
+    }
+
     fetchApps()
+    fetchStats()
   }, [user])
 
   const handleLogout = () => {
@@ -325,6 +411,7 @@ function AppContent() {
     localStorage.removeItem('user')
     setUser(null)
     setApps([])
+    setStats(null)
   }
 
   if (!user) {
@@ -337,8 +424,7 @@ function AppContent() {
       onLogout={handleLogout}
       apps={apps}
       loading={loading}
-      hoveredApp={hoveredApp}
-      setHoveredApp={setHoveredApp}
+      stats={stats}
     />
   )
 }
