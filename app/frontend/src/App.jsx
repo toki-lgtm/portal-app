@@ -22,12 +22,15 @@ function LoginPage({ onLoginSuccess }) {
           `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/auth/google`,
           { token: credentialResponse.access_token }
         )
-        localStorage.setItem('authToken', credentialResponse.access_token)
-        localStorage.setItem('user', JSON.stringify(response.data))
-        onLoginSuccess(response.data)
+        const { token, ...user } = response.data
+        // サーバー発行のJWTを保存（以降のAPIはこれをBearerで送る）
+        localStorage.setItem('authToken', token)
+        localStorage.setItem('user', JSON.stringify(user))
+        onLoginSuccess(user)
       } catch (error) {
         console.error('Login failed:', error)
-        alert('ログインに失敗しました')
+        const msg = error.response?.data?.error || 'ログインに失敗しました'
+        alert(msg)
       } finally {
         setIsLoading(false)
       }
@@ -298,14 +301,18 @@ function AppContent() {
 
     const fetchApps = async () => {
       try {
-        // ユーザー情報をURL パラメータに含める
-        const userParam = encodeURIComponent(JSON.stringify(user))
+        const token = localStorage.getItem('authToken')
         const response = await axios.get(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/apps?user=${userParam}`
+          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/apps`,
+          { headers: { Authorization: `Bearer ${token}` } }
         )
         setApps(response.data)
       } catch (error) {
         console.error('Failed to fetch apps:', error)
+        // トークン切れ・無効ならログアウトして再ログインを促す
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          handleLogout()
+        }
       } finally {
         setLoading(false)
       }
