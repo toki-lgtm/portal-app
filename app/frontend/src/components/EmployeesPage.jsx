@@ -4,7 +4,7 @@ import {
   ArrowLeft, Search, Plus, Download, Award, Pencil, Trash2, X, Save,
   ShieldCheck, AlertTriangle, BadgeCheck, Users,
   ChevronUp, ChevronDown, ChevronsUpDown,
-  ScanLine, Loader2, ExternalLink,
+  ScanLine, Loader2, ExternalLink, UploadCloud, CheckCircle2,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -128,7 +128,9 @@ export default function EmployeesPage({ onBack }) {
 
   const [editing, setEditing] = useState(null) // 編集中の社員 or {} (新規)
   const [showQualMaster, setShowQualMaster] = useState(false)
+  const [certImportFiles, setCertImportFiles] = useState(null) // 資格者証一括取込の対象ファイル
   const [toast, setToast] = useState(null)
+  const certImportRef = useRef(null)
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -281,6 +283,21 @@ export default function EmployeesPage({ onBack }) {
           </Button>
           {canEdit && (
             <>
+              <input
+                ref={certImportRef}
+                type="file"
+                accept="image/*,application/pdf"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const fs = Array.from(e.target.files || [])
+                  if (fs.length) setCertImportFiles(fs)
+                  e.target.value = ''
+                }}
+              />
+              <Button variant="secondary" size="sm" onClick={() => certImportRef.current?.click()}>
+                <UploadCloud className="w-4 h-4" />資格者証を取込
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => setShowQualMaster(true)}>
                 <Award className="w-4 h-4" />資格マスタ
               </Button>
@@ -390,7 +407,205 @@ export default function EmployeesPage({ onBack }) {
           showToast={showToast}
         />
       )}
+
+      {/* 資格者証 一括取込（AIで氏名→社員へ自動振り分け）モーダル */}
+      {certImportFiles && (
+        <CertImportModal
+          files={certImportFiles}
+          employees={employees}
+          quals={quals}
+          onClose={() => setCertImportFiles(null)}
+          onSaved={() => { setCertImportFiles(null); loadAll() }}
+          showToast={showToast}
+        />
+      )}
     </div>
+  )
+}
+
+// 資格者証の一括取込モーダル：
+// アップした各画像/PDFを順に Gemini で読取→氏名から社員・資格名からマスタを自動突合し、
+// 確認リストを作る。人が担当社員/資格を確認・修正してから「すべて保存」で一括登録する。
+function CertImportModal({ files, employees, quals, onClose, onSaved, showToast }) {
+  const [rows, setRows] = useState([])
+  const [scanning, setScanning] = useState(true)
+  const [savingAll, setSavingAll] = useState(false)
+
+  // 社員ドロップダウン（ふりがな順）
+  const staffOptions = useMemo(
+    () => [...employees].sort((a, b) =>
+      String(a.furigana || a.name || '').localeCompare(String(b.furigana || b.name || ''), 'ja')),
+    [employees]
+  )
+
+  // マウント時に全ファイルを順次スキャン（Geminiのレート制限を避けるため逐次）
+  useEffect(() => {
+    let cancelled = false
+    const uid = () => Math.random().toString(36).slice(2)
+    ;(async () => {
+      const out = []
+      for (const file of files) {
+        const base = { id: uid(), fileName: file.name, saveState: 'pending', error: '' }
+        try {
+          const fd = new FormData()
+          fd.append('cert', file)
+          const res = await axios.post(`${apiUrl}/api/qualifications/scan`, fd, {
+            headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
+          })
+          const d = res.data
+          out.push({
+            ...base,
+            certPath: d.cert_image_path, certUrl: d.cert_image_url,
+            personName: d.extracted.person_name || '',
+            staffId: d.matched_staff_id || '',
+            qualId: d.matched_qualification_id || (d.extracted.name ? '__new__' : ''),
+            newQualName: d.extracted.name || '',
+            newQualCategory: d.extracted.category || 'その他',
+            acquired_date: d.extracted.acquired_date || '',
+            expiry_date: d.extracted.expiry_date || '',
+            cert_number: d.extracted.cert_number || '',
+          })
+        } catch (err) {
+          out.push({
+            ...base, saveState: 'error', error: err.response?.data?.error || 'AI読取に失敗',
+            certPath: '', certUrl: '', personName: '', staffId: '', qualId: '',
+            newQualName: '', newQualCategory: 'その他', acquired_date: '', expiry_date: '', cert_number: '',
+          })
+        }
+        if (cancelled) return
+        setRows([...out])
+      }
+      if (!cancelled) setScanning(false)
+    })()
+    return () => { cancelled = true }
+  }, [files])
+
+  const upd = (id, patch) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  const removeRow = (id) => setRows((rs) => rs.filter((r) => r.id !== id))
+
+  const saveAll = async () => {
+    setSavingAll(true)
+    let ok = 0, fail = 0
+    for (const r of rows) {
+      if (r.saveState === 'done') { ok++; continue }
+      if (!r.staffId) { upd(r.id, { saveState: 'error', error: '社員を選択してください' }); fail++; continue }
+      if (r.qualId === '__new__' && !r.newQualName.trim()) { upd(r.id, { saveState: 'error', error: '資格名を入力してください' }); fail++; continue }
+      if (!r.qualId) { upd(r.id, { saveState: 'error', error: '資格を選択してください' }); fail++; continue }
+      upd(r.id, { saveState: 'saving', error: '' })
+      try {
+        let qid = r.qualId
+        if (qid === '__new__') {
+          const mres = await axios.post(`${apiUrl}/api/qualifications`,
+            { name: r.newQualName.trim(), category: r.newQualCategory || 'その他', has_expiry: !!r.expiry_date }, authConfig())
+          qid = mres.data.id
+        }
+        await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, {
+          qualification_id: qid,
+          acquired_date: r.acquired_date,
+          expiry_date: r.expiry_date,
+          cert_number: r.cert_number,
+          cert_image_path: r.certPath || undefined,
+        }, authConfig())
+        upd(r.id, { saveState: 'done' }); ok++
+      } catch (err) {
+        upd(r.id, { saveState: 'error', error: err.response?.data?.error || '保存に失敗' }); fail++
+      }
+    }
+    setSavingAll(false)
+    showToast(fail ? 'error' : 'success', `保存しました（成功 ${ok} 件${fail ? ` / 失敗 ${fail} 件` : ''}）`)
+    if (fail === 0) onSaved()
+  }
+
+  const savable = rows.some((r) => r.saveState !== 'done')
+
+  return (
+    <ModalShell title={`資格者証を取込（${files.length}件）`} onClose={onClose} wide>
+      <p className="text-xs text-slate-400 mb-4">
+        AIが資格者証を読み取り、氏名から社員を自動で割り当てました。<br />
+        担当社員と資格の内容を確認・修正してから「すべて保存」してください。氏名が読み取れない場合は社員を選んでください。
+      </p>
+
+      {scanning && (
+        <div className="flex items-center gap-2 text-sm text-slate-500 mb-3">
+          <Loader2 className="w-4 h-4 animate-spin" />AI読取中...（{rows.length}/{files.length}）
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {rows.map((r) => (
+          <Card key={r.id} className="p-3 bg-slate-50 dark:bg-ink-900/40">
+            <div className="flex gap-3">
+              {r.certUrl
+                ? <img src={r.certUrl} alt="" className="w-16 h-16 object-cover rounded-md border border-slate-200 dark:border-ink-600 shrink-0" />
+                : <div className="w-16 h-16 rounded-md bg-slate-200 dark:bg-ink-700 shrink-0" />}
+              <div className="flex-1 min-w-0">
+                {r.saveState === 'error' && r.error && (
+                  <p className="text-xs text-danger-500 mb-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{r.error}</p>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Field label={`社員${r.personName ? `（読取: ${r.personName}）` : '（氏名未読取）'}`}>
+                    <select className={inputCls} value={r.staffId} onChange={(e) => upd(r.id, { staffId: e.target.value })}>
+                      <option value="">選択してください</option>
+                      {staffOptions.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}{s.is_active === false ? '（退職）' : ''}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="資格">
+                    <select className={inputCls} value={r.qualId} onChange={(e) => upd(r.id, { qualId: e.target.value })}>
+                      <option value="">選択してください</option>
+                      {r.newQualName && <option value="__new__">＋新規登録: {r.newQualName}</option>}
+                      {quals.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
+                    </select>
+                  </Field>
+                  {r.qualId === '__new__' && (
+                    <>
+                      <Field label="新規資格名">
+                        <input className={inputCls} value={r.newQualName} onChange={(e) => upd(r.id, { newQualName: e.target.value })} />
+                      </Field>
+                      <Field label="区分">
+                        <select className={inputCls} value={r.newQualCategory} onChange={(e) => upd(r.id, { newQualCategory: e.target.value })}>
+                          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </Field>
+                    </>
+                  )}
+                  <Field label="取得（修了）日">
+                    <input type="date" className={inputCls} value={r.acquired_date} onChange={(e) => upd(r.id, { acquired_date: e.target.value })} />
+                  </Field>
+                  <Field label="有効期限">
+                    <input type="date" className={inputCls} value={r.expiry_date} onChange={(e) => upd(r.id, { expiry_date: e.target.value })} />
+                  </Field>
+                  <Field label="証明書番号">
+                    <input className={inputCls} value={r.cert_number} onChange={(e) => upd(r.id, { cert_number: e.target.value })} />
+                  </Field>
+                </div>
+              </div>
+              <div className="flex flex-col items-center gap-2 shrink-0">
+                {r.saveState === 'saving' && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                {r.saveState === 'done' && <CheckCircle2 className="w-5 h-5 text-success-500" />}
+                {r.saveState !== 'done' && r.saveState !== 'saving' && (
+                  <button onClick={() => removeRow(r.id)} className="text-slate-300 hover:text-danger-500 p-1" title="この行を除外">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </Card>
+        ))}
+        {!scanning && rows.length === 0 && (
+          <p className="text-sm text-slate-400 py-6 text-center">読み取れる資格者証がありませんでした</p>
+        )}
+      </div>
+
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="ghost" size="sm" onClick={onClose}>閉じる</Button>
+        <Button variant="primary" size="sm" onClick={saveAll} disabled={scanning || savingAll || !savable}>
+          {savingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {savingAll ? '保存中...' : 'すべて保存'}
+        </Button>
+      </div>
+    </ModalShell>
   )
 }
 
