@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Search, Plus, Download, Award, Pencil, Trash2, X, Save,
   ShieldCheck, AlertTriangle, BadgeCheck, Users,
   ChevronUp, ChevronDown, ChevronsUpDown,
+  ScanLine, Loader2, ExternalLink,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -44,7 +45,7 @@ const SORT_ACCESSORS = {
 // 現在表示中の行を CSV（UTF-8 BOM付き＝Excelで文字化けしない）でダウンロード
 function exportEmployeesCsv(rows) {
   const headers = ['社員ID', '氏名', 'ふりがな', '会社', '職種', '部署', 'メール', '電話',
-    '郵便番号', '住所', '入社日', '勤続年数', '生年月日', '在籍', '資格数']
+    '郵便番号', '住所', '入社日', '勤続年数', '生年月日', '在籍', '資格数', '期限切れ', '期限間近']
   const esc = (v) => {
     const s = v == null ? '' : String(v)
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
@@ -56,6 +57,7 @@ function exportEmployeesCsv(rows) {
       e.id, e.name, e.furigana, e.company, e.job_type, e.department, e.email, e.phone,
       e.postal_code, e.address, e.hire_date, y != null ? y : '', e.birth_date,
       e.is_active === false ? '退職' : '在籍', e.qualification_count || 0,
+      e.qualification_expired || 0, e.qualification_expiring || 0,
     ].map(esc).join(','))
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
@@ -666,12 +668,20 @@ function EmployeeModal({ employee, isNew, canEdit, quals, suggestions = {}, onCl
   )
 }
 
+// 資格セクションの空ドラフト
+const EMPTY_QUAL_DRAFT = {
+  qualification_id: '', acquired_date: '', expiry_date: '', cert_number: '', note: '',
+  _newMasterName: '', _newMasterCategory: 'その他', _certPath: '', _certUrl: '',
+}
+
 // 社員の資格セクション
 function QualSection({ staffId, quals, canEdit, showToast }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
-  const [draft, setDraft] = useState({ qualification_id: '', acquired_date: '', expiry_date: '', cert_number: '', note: '' })
+  const [scanning, setScanning] = useState(false)
+  const [draft, setDraft] = useState(EMPTY_QUAL_DRAFT)
+  const fileRef = useRef(null)
 
   const load = useCallback(async () => {
     try {
@@ -687,13 +697,70 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
   // 未登録の資格だけ選択肢に出す
   const available = quals.filter((q) => !rows.some((r) => r.qualification_id === q.id))
   const selectedMaster = quals.find((q) => q.id === draft.qualification_id)
+  // 新規マスタ作成モード（スキャンで既存マスタに該当が無かった場合）
+  const isNewMaster = !!draft._newMasterName && !draft.qualification_id
+
+  const resetDraft = () => { setDraft(EMPTY_QUAL_DRAFT); setAdding(false) }
+
+  // 資格者証をアップロード → AI 読取 → 確認フォームを開く
+  const scanCert = async (file) => {
+    if (!file) return
+    setScanning(true)
+    try {
+      const fd = new FormData()
+      fd.append('cert', file)
+      const res = await axios.post(
+        `${apiUrl}/api/employees/${staffId}/qualifications/scan`,
+        fd,
+        { headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' } }
+      )
+      const { extracted, matched_qualification_id, cert_image_path, cert_image_url } = res.data
+      setDraft({
+        qualification_id: matched_qualification_id || '',
+        acquired_date: extracted.acquired_date || '',
+        expiry_date: extracted.expiry_date || '',
+        cert_number: extracted.cert_number || '',
+        note: '',
+        _newMasterName: matched_qualification_id ? '' : (extracted.name || ''),
+        _newMasterCategory: extracted.category || 'その他',
+        _certPath: cert_image_path || '',
+        _certUrl: cert_image_url || '',
+      })
+      setAdding(true)
+      showToast('success', matched_qualification_id
+        ? 'AI読取が完了しました。内容を確認・修正してください'
+        : '読取完了。未登録の資格のため新規作成します。内容をご確認ください')
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'AI読取に失敗しました')
+    } finally {
+      setScanning(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   const add = async () => {
-    if (!draft.qualification_id) { showToast('error', '資格を選択してください'); return }
     try {
-      await axios.post(`${apiUrl}/api/employees/${staffId}/qualifications`, draft, authConfig())
-      setAdding(false)
-      setDraft({ qualification_id: '', acquired_date: '', expiry_date: '', cert_number: '', note: '' })
+      let qid = draft.qualification_id
+      // 既存マスタに該当が無ければ、まず資格マスタを新規作成
+      if (!qid && isNewMaster) {
+        if (!draft._newMasterName.trim()) { showToast('error', '資格名を入力してください'); return }
+        const res = await axios.post(`${apiUrl}/api/qualifications`, {
+          name: draft._newMasterName.trim(),
+          category: draft._newMasterCategory || 'その他',
+          has_expiry: !!draft.expiry_date,
+        }, authConfig())
+        qid = res.data.id
+      }
+      if (!qid) { showToast('error', '資格を選択してください'); return }
+      await axios.post(`${apiUrl}/api/employees/${staffId}/qualifications`, {
+        qualification_id: qid,
+        acquired_date: draft.acquired_date,
+        expiry_date: draft.expiry_date,
+        cert_number: draft.cert_number,
+        note: draft.note,
+        cert_image_path: draft._certPath || undefined,
+      }, authConfig())
+      resetDraft()
       load()
       showToast('success', '資格を追加しました')
     } catch (err) {
@@ -734,7 +801,13 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
                   <div className="text-xs text-slate-400 mt-0.5">
                     {r.acquired_date && <>取得 {r.acquired_date}　</>}
                     {r.expiry_date && <>有効期限 {r.expiry_date}　</>}
-                    {r.cert_number && <>No.{r.cert_number}</>}
+                    {r.cert_number && <>No.{r.cert_number}　</>}
+                    {r.cert_image_url && (
+                      <a href={r.cert_image_url} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-0.5 text-brand-500 hover:underline" onClick={(ev) => ev.stopPropagation()}>
+                        <ExternalLink className="w-3 h-3" />資格者証
+                      </a>
+                    )}
                   </div>
                 </div>
                 {canEdit && (
@@ -750,13 +823,37 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
 
       {canEdit && (adding ? (
         <Card className="p-4 bg-slate-50 dark:bg-ink-900/40">
+          {/* AI読取の元画像プレビュー */}
+          {draft._certUrl && (
+            <div className="flex items-start gap-3 mb-3 p-2 rounded-lg bg-brand-50 dark:bg-brand-500/10 border border-brand-100 dark:border-brand-500/20">
+              <img src={draft._certUrl} alt="資格者証" className="w-16 h-16 object-cover rounded-md border border-slate-200 dark:border-ink-600" />
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                AIが資格者証を読み取りました。<br />内容を確認し、誤りがあれば修正して保存してください。
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="資格 *">
-              <select className={inputCls} value={draft.qualification_id} onChange={(e) => setDraft((d) => ({ ...d, qualification_id: e.target.value }))}>
-                <option value="">選択してください</option>
-                {available.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
-              </select>
-            </Field>
+            {isNewMaster ? (
+              <>
+                <Field label="資格名 *（新規登録）">
+                  <input className={inputCls} value={draft._newMasterName}
+                    onChange={(e) => setDraft((d) => ({ ...d, _newMasterName: e.target.value }))} />
+                </Field>
+                <Field label="区分">
+                  <select className={inputCls} value={draft._newMasterCategory}
+                    onChange={(e) => setDraft((d) => ({ ...d, _newMasterCategory: e.target.value }))}>
+                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+              </>
+            ) : (
+              <Field label="資格 *">
+                <select className={inputCls} value={draft.qualification_id} onChange={(e) => setDraft((d) => ({ ...d, qualification_id: e.target.value }))}>
+                  <option value="">選択してください</option>
+                  {available.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
+                </select>
+              </Field>
+            )}
             <Field label="取得（修了）日"><input type="date" className={inputCls} value={draft.acquired_date} onChange={(e) => setDraft((d) => ({ ...d, acquired_date: e.target.value }))} /></Field>
             <Field label={`有効期限${selectedMaster && !selectedMaster.has_expiry ? '（期限なし資格）' : ''}`}>
               <input type="date" className={inputCls} value={draft.expiry_date} onChange={(e) => setDraft((d) => ({ ...d, expiry_date: e.target.value }))} />
@@ -764,14 +861,28 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
             <Field label="証明書番号"><input className={inputCls} value={draft.cert_number} onChange={(e) => setDraft((d) => ({ ...d, cert_number: e.target.value }))} /></Field>
           </div>
           <div className="flex justify-end gap-2 mt-3">
-            <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>キャンセル</Button>
+            <Button variant="ghost" size="sm" onClick={resetDraft}>キャンセル</Button>
             <Button variant="primary" size="sm" onClick={add}>追加</Button>
           </div>
         </Card>
       ) : (
-        <Button variant="secondary" size="sm" onClick={() => setAdding(true)} disabled={available.length === 0}>
-          <Plus className="w-4 h-4" />資格を追加
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {/* 資格者証をAIで読み取って追加 */}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*,application/pdf"
+            className="hidden"
+            onChange={(e) => scanCert(e.target.files?.[0])}
+          />
+          <Button variant="primary" size="sm" onClick={() => fileRef.current?.click()} disabled={scanning}>
+            {scanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ScanLine className="w-4 h-4" />}
+            {scanning ? 'AI読取中...' : '資格者証をスキャン（AI読取）'}
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => setAdding(true)} disabled={available.length === 0}>
+            <Plus className="w-4 h-4" />手入力で追加
+          </Button>
+        </div>
       ))}
     </div>
   )
