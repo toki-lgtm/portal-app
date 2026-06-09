@@ -17,6 +17,7 @@ const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 const APP_LABELS = {
   'safety-patrol': '安全パトロール',
   'employee-list': '社員一覧',
+  'bids': '入札案件管理',
   'mailer': 'メーラー',
   'file-manager': 'ファイル管理',
   'evaluation': '社員評価',
@@ -438,11 +439,13 @@ export default function EmployeesPage({ onBack }) {
 }
 
 // 資格者証の一括取込モーダル：
-// アップした各画像/PDFを順に Gemini で読取→氏名から社員・資格名からマスタを自動突合し、
-// 確認リストを作る。人が担当社員/資格を確認・修正してから「すべて保存」で一括登録する。
+// 束ねPDF（資格一覧表＋名簿＋証書スキャン）をアップすると、名簿・証書から
+// 資格×保有者の行を多数抽出。確認リストを資格見出しごとにグルーピングして表示し、
+// 人が担当社員/資格を確認・修正してから「すべて保存」で一括登録する。
 function CertImportModal({ files, employees, quals, onClose, onSaved, showToast }) {
   const [rows, setRows] = useState([])
   const [scanning, setScanning] = useState(true)
+  const [scanProgress, setScanProgress] = useState({ done: 0, total: files.length, rowCount: 0 })
   const [savingAll, setSavingAll] = useState(false)
 
   // 社員ドロップダウン（ふりがな順）
@@ -453,40 +456,66 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   )
 
   // マウント時に全ファイルを順次スキャン（Geminiのレート制限を避けるため逐次）
+  // 新APIは { records: [...] } を返す。各ファイルの records をフラット化して行リストへ展開。
   useEffect(() => {
     let cancelled = false
     const uid = () => Math.random().toString(36).slice(2)
     ;(async () => {
       const out = []
-      for (const file of files) {
-        const base = { id: uid(), fileName: file.name, saveState: 'pending', error: '' }
+      for (let fi = 0; fi < files.length; fi++) {
+        const file = files[fi]
         try {
           const fd = new FormData()
           fd.append('cert', file)
           const res = await axios.post(`${apiUrl}/api/qualifications/scan`, fd, {
             headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
           })
-          const d = res.data
-          out.push({
-            ...base,
-            certPath: d.cert_image_path, certUrl: d.cert_image_url,
-            personName: d.extracted.person_name || '',
-            staffId: d.matched_staff_id || '',
-            qualId: d.matched_qualification_id || (d.extracted.name ? '__new__' : ''),
-            newQualName: d.extracted.name || '',
-            newQualCategory: d.extracted.category || 'その他',
-            acquired_date: d.extracted.acquired_date || '',
-            expiry_date: d.extracted.expiry_date || '',
-            cert_number: d.extracted.cert_number || '',
-          })
+          const records = res.data?.records || []
+          for (const rec of records) {
+            out.push({
+              id: uid(),
+              fileName: file.name,
+              saveState: 'pending',
+              error: '',
+              // APIフィールドをそのままマッピング
+              source: rec.source || 'certificate',
+              personName: rec.person_name || '',
+              staffId: rec.matched_staff_id || '',
+              matchMethod: rec.match_method || 'none',
+              qualId: rec.matched_qualification_id
+                ? String(rec.matched_qualification_id)
+                : (rec.qualification_name ? '__new__' : ''),
+              newQualName: rec.qualification_name || '',
+              newQualCategory: rec.qualification_category || 'その他',
+              acquired_date: rec.acquired_date || '',
+              expiry_date: rec.expiry_date || '',
+              cert_number: rec.cert_number || '',
+              birth_date: rec.birth_date || '',
+              honseki: rec.honseki || '',
+              issuer: rec.issuer || '',
+              certPath: rec.cert_image_path || null,
+              certUrl: rec.cert_image_url || null,
+              certIsPdf: !!rec.cert_is_pdf,
+              birthMismatch: !!rec.birth_mismatch,
+            })
+          }
+          // records が0件でもファイル読取成功（空PDF等）は何も追加しない
         } catch (err) {
+          // ファイル単位の読取失敗は dummy エラー行として追加
           out.push({
-            ...base, saveState: 'error', error: err.response?.data?.error || 'AI読取に失敗',
-            certPath: '', certUrl: '', personName: '', staffId: '', qualId: '',
-            newQualName: '', newQualCategory: 'その他', acquired_date: '', expiry_date: '', cert_number: '',
+            id: uid(),
+            fileName: file.name,
+            saveState: 'error',
+            error: err.response?.data?.error || `${file.name}: AI読取に失敗`,
+            source: 'certificate', personName: '', staffId: '', matchMethod: 'none',
+            qualId: '', newQualName: '', newQualCategory: 'その他',
+            acquired_date: '', expiry_date: '', cert_number: '',
+            birth_date: '', honseki: '', issuer: '',
+            certPath: null, certUrl: null, certIsPdf: false, birthMismatch: false,
           })
         }
         if (cancelled) return
+        setScanProgress({ done: fi + 1, total: files.length, rowCount: out.length })
         setRows([...out])
       }
       if (!cancelled) setScanning(false)
@@ -497,11 +526,28 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   const upd = (id, patch) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
   const removeRow = (id) => setRows((rs) => rs.filter((r) => r.id !== id))
 
+  // 資格名でグルーピング（新規は newQualName、既存は quals から名前を引く）
+  const grouped = useMemo(() => {
+    const map = new Map()
+    for (const r of rows) {
+      const key = r.qualId === '__new__'
+        ? (r.newQualName || '（資格名未設定）')
+        : r.qualId
+          ? (quals.find((q) => String(q.id) === String(r.qualId))?.name || r.newQualName || r.qualId)
+          : (r.newQualName || '（資格名未設定）')
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(r)
+    }
+    return [...map.entries()] // [ [qualName, rows[]] ]
+  }, [rows, quals])
+
   const saveAll = async () => {
     setSavingAll(true)
     let ok = 0, fail = 0
     for (const r of rows) {
       if (r.saveState === 'done') { ok++; continue }
+      // エラー行かつ certPath/certUrl 無し＆personName 無しのスキャン失敗行はスキップ
+      if (r.saveState === 'error' && !r.personName && !r.staffId) { fail++; continue }
       if (!r.staffId) { upd(r.id, { saveState: 'error', error: '社員を選択してください' }); fail++; continue }
       if (r.qualId === '__new__' && !r.newQualName.trim()) { upd(r.id, { saveState: 'error', error: '資格名を入力してください' }); fail++; continue }
       if (!r.qualId) { upd(r.id, { saveState: 'error', error: '資格を選択してください' }); fail++; continue }
@@ -513,13 +559,16 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
             { name: r.newQualName.trim(), category: r.newQualCategory || 'その他', has_expiry: !!r.expiry_date }, authConfig())
           qid = mres.data.id
         }
-        await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, {
+        const body = {
           qualification_id: qid,
-          acquired_date: r.acquired_date,
-          expiry_date: r.expiry_date,
-          cert_number: r.cert_number,
+          acquired_date: r.acquired_date || undefined,
+          expiry_date: r.expiry_date || undefined,
+          cert_number: r.cert_number || undefined,
           cert_image_path: r.certPath || undefined,
-        }, authConfig())
+        }
+        if (r.issuer) body.issuer = r.issuer
+        if (r.honseki) body.honseki = r.honseki
+        await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, body, authConfig())
         upd(r.id, { saveState: 'done' }); ok++
       } catch (err) {
         upd(r.id, { saveState: 'error', error: err.response?.data?.error || '保存に失敗' }); fail++
@@ -533,82 +582,47 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   const savable = rows.some((r) => r.saveState !== 'done')
 
   return (
-    <ModalShell title={`資格者証を取込（${files.length}件）`} onClose={onClose} wide>
+    <ModalShell title={`束ねPDF・資格者証の一括取込（${files.length}ファイル）`} onClose={onClose} wide>
       <p className="text-xs text-slate-400 mb-4">
-        AIが資格者証を読み取り、氏名から社員を自動で割り当てました。<br />
-        担当社員と資格の内容を確認・修正してから「すべて保存」してください。氏名が読み取れない場合は社員を選んでください。
+        束ねPDF（資格一覧表・名簿・証書スキャン）から資格保有者を抽出しました。<br />
+        社員と資格の内容を確認・修正してから「すべて保存」してください。名簿のみの行（証書画像なし）も資格保有として登録されます。
       </p>
 
       {scanning && (
         <div className="flex items-center gap-2 text-sm text-slate-500 mb-3">
-          <Loader2 className="w-4 h-4 animate-spin" />AI読取中...（{rows.length}/{files.length}）
+          <Loader2 className="w-4 h-4 animate-spin" />
+          AI読取中...（ファイル {scanProgress.done}/{scanProgress.total}
+          {scanProgress.rowCount > 0 ? `・${scanProgress.rowCount}件抽出済み` : ''}）
         </div>
       )}
 
-      <div className="space-y-3">
-        {rows.map((r) => (
-          <Card key={r.id} className="p-3 bg-slate-50 dark:bg-ink-900/40">
-            <div className="flex gap-3">
-              {r.certUrl
-                ? <img src={r.certUrl} alt="" className="w-16 h-16 object-cover rounded-md border border-slate-200 dark:border-ink-600 shrink-0" />
-                : <div className="w-16 h-16 rounded-md bg-slate-200 dark:bg-ink-700 shrink-0" />}
-              <div className="flex-1 min-w-0">
-                {r.saveState === 'error' && r.error && (
-                  <p className="text-xs text-danger-500 mb-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" />{r.error}</p>
-                )}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <Field label={`社員${r.personName ? `（読取: ${r.personName}）` : '（氏名未読取）'}`}>
-                    <select className={inputCls} value={r.staffId} onChange={(e) => upd(r.id, { staffId: e.target.value })}>
-                      <option value="">選択してください</option>
-                      {staffOptions.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}{s.is_active === false ? '（退職）' : ''}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="資格">
-                    <select className={inputCls} value={r.qualId} onChange={(e) => upd(r.id, { qualId: e.target.value })}>
-                      <option value="">選択してください</option>
-                      {r.newQualName && <option value="__new__">＋新規登録: {r.newQualName}</option>}
-                      {quals.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
-                    </select>
-                  </Field>
-                  {r.qualId === '__new__' && (
-                    <>
-                      <Field label="新規資格名">
-                        <input className={inputCls} value={r.newQualName} onChange={(e) => upd(r.id, { newQualName: e.target.value })} />
-                      </Field>
-                      <Field label="区分">
-                        <select className={inputCls} value={r.newQualCategory} onChange={(e) => upd(r.id, { newQualCategory: e.target.value })}>
-                          {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                      </Field>
-                    </>
-                  )}
-                  <Field label="取得（修了）日">
-                    <input type="date" className={inputCls} value={r.acquired_date} onChange={(e) => upd(r.id, { acquired_date: e.target.value })} />
-                  </Field>
-                  <Field label="有効期限">
-                    <input type="date" className={inputCls} value={r.expiry_date} onChange={(e) => upd(r.id, { expiry_date: e.target.value })} />
-                  </Field>
-                  <Field label="証明書番号">
-                    <input className={inputCls} value={r.cert_number} onChange={(e) => upd(r.id, { cert_number: e.target.value })} />
-                  </Field>
-                </div>
-              </div>
-              <div className="flex flex-col items-center gap-2 shrink-0">
-                {r.saveState === 'saving' && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
-                {r.saveState === 'done' && <CheckCircle2 className="w-5 h-5 text-success-500" />}
-                {r.saveState !== 'done' && r.saveState !== 'saving' && (
-                  <button onClick={() => removeRow(r.id)} className="text-slate-300 hover:text-danger-500 p-1" title="この行を除外">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
+      {/* 資格見出しごとにグループ表示 */}
+      <div className="space-y-5">
+        {grouped.map(([qualName, groupRows]) => (
+          <div key={qualName}>
+            {/* グループ見出し */}
+            <div className="flex items-center gap-2 mb-2 pb-1 border-b border-slate-200 dark:border-ink-700">
+              <Award className="w-4 h-4 text-brand-500 shrink-0" />
+              <span className="text-sm font-bold text-slate-700 dark:text-slate-200">{qualName}</span>
+              <span className="text-xs text-slate-400">{groupRows.length}名</span>
             </div>
-          </Card>
+            {/* グループ内の行 */}
+            <div className="space-y-2 pl-1">
+              {groupRows.map((r) => (
+                <CertImportRow
+                  key={r.id}
+                  r={r}
+                  staffOptions={staffOptions}
+                  quals={quals}
+                  onUpd={upd}
+                  onRemove={removeRow}
+                />
+              ))}
+            </div>
+          </div>
         ))}
         {!scanning && rows.length === 0 && (
-          <p className="text-sm text-slate-400 py-6 text-center">読み取れる資格者証がありませんでした</p>
+          <p className="text-sm text-slate-400 py-6 text-center">読み取れる資格・保有者がありませんでした</p>
         )}
       </div>
 
@@ -620,6 +634,141 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
         </Button>
       </div>
     </ModalShell>
+  )
+}
+
+// 取込行の1件UI
+function CertImportRow({ r, staffOptions, quals, onUpd, onRemove }) {
+  const upd = (patch) => onUpd(r.id, patch)
+
+  // 証書プレビュー部分
+  const renderPreview = () => {
+    if (!r.certUrl) {
+      // 名簿のみ（証書画像なし）
+      return (
+        <div className="w-16 h-16 rounded-md bg-slate-100 dark:bg-ink-700 shrink-0 flex flex-col items-center justify-center gap-1 border border-slate-200 dark:border-ink-600">
+          <Award className="w-5 h-5 text-slate-300" />
+          <span className="text-[9px] text-slate-400 text-center leading-tight px-1">名簿<br />のみ</span>
+        </div>
+      )
+    }
+    // certIsPdf=true か URL が .pdf なら「原本を開く」リンク
+    const looksLikePdf = r.certIsPdf || /\.pdf($|\?)/i.test(r.certUrl)
+    if (looksLikePdf) {
+      return (
+        <a
+          href={r.certUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="w-16 h-16 rounded-md bg-brand-50 dark:bg-brand-500/10 shrink-0 flex flex-col items-center justify-center gap-1 border border-brand-100 dark:border-brand-500/20 hover:bg-brand-100 dark:hover:bg-brand-500/20 transition"
+          title="原本を開く"
+        >
+          <ExternalLink className="w-5 h-5 text-brand-500" />
+          <span className="text-[9px] text-brand-500 text-center leading-tight">原本を<br />開く</span>
+        </a>
+      )
+    }
+    // 画像サムネ
+    return (
+      <img
+        src={r.certUrl}
+        alt=""
+        className="w-16 h-16 object-cover rounded-md border border-slate-200 dark:border-ink-600 shrink-0"
+      />
+    )
+  }
+
+  return (
+    <Card className="p-3 bg-slate-50 dark:bg-ink-900/40">
+      <div className="flex gap-3">
+        {renderPreview()}
+        <div className="flex-1 min-w-0">
+          {r.saveState === 'error' && r.error && (
+            <p className="text-xs text-danger-500 mb-1 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />{r.error}
+            </p>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* 社員選択 */}
+            <div>
+              <Field label={`社員${r.personName ? `（読取: ${r.personName}）` : '（氏名未読取）'}`}>
+                <select className={inputCls} value={r.staffId} onChange={(e) => upd({ staffId: e.target.value })}>
+                  <option value="">選択してください</option>
+                  {staffOptions.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}{s.is_active === false ? '（退職）' : ''}</option>
+                  ))}
+                </select>
+              </Field>
+              {/* 社員未マッチ警告 */}
+              {r.matchMethod === 'none' && !r.staffId && (
+                <p className="text-xs text-warning-500 mt-0.5 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />自動照合できませんでした。社員を選択してください
+                </p>
+              )}
+              {/* 生年月日不一致警告 */}
+              {r.birthMismatch && (
+                <p className="text-xs text-warning-500 mt-0.5 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />台帳の生年月日と不一致
+                </p>
+              )}
+            </div>
+
+            {/* 資格選択 */}
+            <Field label="資格">
+              <select className={inputCls} value={r.qualId} onChange={(e) => upd({ qualId: e.target.value })}>
+                <option value="">選択してください</option>
+                {r.newQualName && <option value="__new__">＋新規登録: {r.newQualName}</option>}
+                {quals.map((q) => <option key={q.id} value={String(q.id)}>{q.name}</option>)}
+              </select>
+            </Field>
+
+            {/* 新規資格名・区分 */}
+            {r.qualId === '__new__' && (
+              <>
+                <Field label="新規資格名">
+                  <input className={inputCls} value={r.newQualName} onChange={(e) => upd({ newQualName: e.target.value })} />
+                </Field>
+                <Field label="区分">
+                  <select className={inputCls} value={r.newQualCategory} onChange={(e) => upd({ newQualCategory: e.target.value })}>
+                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+              </>
+            )}
+
+            <Field label="取得（修了）日">
+              <input type="date" className={inputCls} value={r.acquired_date} onChange={(e) => upd({ acquired_date: e.target.value })} />
+            </Field>
+            <Field label="有効期限">
+              <input type="date" className={inputCls} value={r.expiry_date} onChange={(e) => upd({ expiry_date: e.target.value })} />
+            </Field>
+            <Field label="証明書番号">
+              <input className={inputCls} value={r.cert_number} onChange={(e) => upd({ cert_number: e.target.value })} />
+            </Field>
+          </div>
+
+          {/* 参考情報（読取値があるもののみ表示）*/}
+          {(r.birth_date || r.honseki || r.issuer) && (
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-400">
+              {r.birth_date && <span>生年月日: {r.birth_date}</span>}
+              {r.honseki && <span>本籍: {r.honseki}</span>}
+              {r.issuer && <span>発行者: {r.issuer}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* 行アクション */}
+        <div className="flex flex-col items-center gap-2 shrink-0">
+          {r.saveState === 'saving' && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+          {r.saveState === 'done' && <CheckCircle2 className="w-5 h-5 text-success-500" />}
+          {r.saveState !== 'done' && r.saveState !== 'saving' && (
+            <button onClick={() => onRemove(r.id)} className="text-slate-300 hover:text-danger-500 p-1" title="この行を除外">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 
