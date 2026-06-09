@@ -5,7 +5,7 @@ import {
   ShieldCheck, AlertTriangle, BadgeCheck, Users,
   ChevronUp, ChevronDown, ChevronsUpDown,
   ScanLine, Loader2, ExternalLink, UploadCloud, CheckCircle2,
-  Eye, EyeOff, Copy, Check,
+  Eye, EyeOff, Copy, Check, Mail,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -129,6 +129,7 @@ export default function EmployeesPage({ onBack }) {
 
   const [editing, setEditing] = useState(null) // 編集中の社員 or {} (新規)
   const [showQualMaster, setShowQualMaster] = useState(false)
+  const [showShared, setShowShared] = useState(false) // 共有メール一覧
   const [certImportFiles, setCertImportFiles] = useState(null) // 資格者証一括取込の対象ファイル
   const [toast, setToast] = useState(null)
   const certImportRef = useRef(null)
@@ -282,6 +283,9 @@ export default function EmployeesPage({ onBack }) {
           <Button variant="secondary" size="sm" onClick={() => exportEmployeesCsv(sorted)} disabled={sorted.length === 0}>
             <Download className="w-4 h-4" />CSV出力
           </Button>
+          <Button variant="secondary" size="sm" onClick={() => setShowShared(true)}>
+            <Mail className="w-4 h-4" />共有メール
+          </Button>
           {canEdit && (
             <>
               <input
@@ -394,6 +398,15 @@ export default function EmployeesPage({ onBack }) {
           suggestions={suggestions}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); loadAll() }}
+          showToast={showToast}
+        />
+      )}
+
+      {/* 共有メールアドレス一覧モーダル */}
+      {showShared && (
+        <SharedMailboxModal
+          canEdit={canEdit}
+          onClose={() => setShowShared(false)}
           showToast={showToast}
         />
       )}
@@ -721,6 +734,162 @@ function PasswordField({ value, onChange }) {
         {copied ? <Check className="w-4 h-4 text-success-500" /> : <Copy className="w-4 h-4" />}
       </button>
     </div>
+  )
+}
+
+// クリップボードへコピーする小さなボタン（テキスト用）
+function CopyButton({ value, title = 'コピー' }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async (e) => {
+    e.stopPropagation()
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* 無視 */ }
+  }
+  return (
+    <button type="button" onClick={copy} disabled={!value} title={title}
+      className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700 disabled:opacity-40">
+      {copied ? <Check className="w-3.5 h-3.5 text-success-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  )
+}
+
+// 共有メールアドレス一覧モーダル（個人に紐付かない共用メール）
+// 閲覧は誰でも、パスワードと追加/編集/削除は管理者(canEdit)のみ。
+function SharedMailboxModal({ canEdit, onClose, showToast }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editingId, setEditingId] = useState(null) // 編集中の行id or '_new'
+  const [draft, setDraft] = useState({ email: '', label: '', email_password: '' })
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await axios.get(`${apiUrl}/api/shared-mailboxes`, authConfig())
+      setRows(res.data)
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '共有メールの取得に失敗しました')
+    } finally { setLoading(false) }
+  }, [showToast])
+
+  useEffect(() => { load() }, [load])
+
+  const startNew = () => { setDraft({ email: '', label: '', email_password: '' }); setEditingId('_new') }
+  const startEdit = (r) => { setDraft({ email: r.email || '', label: r.label || '', email_password: r.email_password || '' }); setEditingId(r.id) }
+  const cancel = () => { setEditingId(null) }
+
+  const save = async () => {
+    if (!draft.email.trim()) { showToast('error', 'メールアドレスは必須です'); return }
+    setBusy(true)
+    try {
+      if (editingId === '_new') {
+        await axios.post(`${apiUrl}/api/shared-mailboxes`, draft, authConfig())
+      } else {
+        await axios.put(`${apiUrl}/api/shared-mailboxes/${editingId}`, draft, authConfig())
+      }
+      setEditingId(null)
+      await load()
+      showToast('success', '保存しました')
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '保存に失敗しました')
+    } finally { setBusy(false) }
+  }
+
+  const remove = async (r) => {
+    if (!confirm(`${r.label || r.email} を削除しますか？`)) return
+    try {
+      await axios.delete(`${apiUrl}/api/shared-mailboxes/${r.id}`, authConfig())
+      await load()
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '削除に失敗しました')
+    }
+  }
+
+  return (
+    <ModalShell title="共有メールアドレス" onClose={onClose} wide>
+      <p className="text-xs text-slate-400 mb-4">
+        拠点・部署・用途で共用するメールアドレスの一覧です。
+        {canEdit ? 'パスワードは管理者のみ表示されます。' : 'パスワードは管理者のみ閲覧できます。'}
+      </p>
+
+      {loading ? (
+        <div className="text-center py-10 text-slate-400 text-sm">読み込み中...</div>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-ink-700">
+          {rows.length === 0 && editingId !== '_new' && (
+            <li className="text-sm text-slate-400 py-6 text-center">共有メールが登録されていません</li>
+          )}
+          {rows.map((r) => (
+            <li key={r.id} className="py-3">
+              {editingId === r.id ? (
+                <SharedMailboxForm draft={draft} setDraft={setDraft} canEdit={canEdit} onSave={save} onCancel={cancel} busy={busy} />
+              ) : (
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.label || '(用途未設定)'}</div>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="text-sm text-slate-600 dark:text-slate-300 font-mono truncate">{r.email}</span>
+                      <CopyButton value={r.email} title="メールをコピー" />
+                    </div>
+                    {canEdit && (
+                      <div className="mt-1 max-w-xs">
+                        <PasswordField value={r.email_password} onChange={() => {}} />
+                      </div>
+                    )}
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => startEdit(r)} className="text-slate-300 hover:text-brand-500 p-1" title="編集"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={() => remove(r)} className="text-slate-300 hover:text-danger-500 p-1" title="削除"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+          {editingId === '_new' && (
+            <li className="py-3">
+              <SharedMailboxForm draft={draft} setDraft={setDraft} canEdit={canEdit} onSave={save} onCancel={cancel} busy={busy} isNew />
+            </li>
+          )}
+        </ul>
+      )}
+
+      {canEdit && editingId === null && (
+        <div className="flex justify-end mt-5">
+          <Button variant="primary" size="sm" onClick={startNew}><Plus className="w-4 h-4" />共有メールを追加</Button>
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
+// 共有メールの追加/編集フォーム
+function SharedMailboxForm({ draft, setDraft, canEdit, onSave, onCancel, busy, isNew }) {
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }))
+  return (
+    <Card className="p-3 bg-slate-50 dark:bg-ink-900/40">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="用途/拠点名"><input className={inputCls} value={draft.label} onChange={(e) => set('label', e.target.value)} placeholder="例: 対馬本社" /></Field>
+        <Field label="メールアドレス *"><input className={inputCls} type="email" value={draft.email} onChange={(e) => set('email', e.target.value)} /></Field>
+        {canEdit && (
+          <div className="sm:col-span-2">
+            <Field label="メールパスワード（管理者のみ）">
+              <PasswordField value={draft.email_password} onChange={(v) => set('email_password', v)} />
+            </Field>
+          </div>
+        )}
+      </div>
+      <div className="flex justify-end gap-2 mt-3">
+        <Button variant="ghost" size="sm" onClick={onCancel}>キャンセル</Button>
+        <Button variant="primary" size="sm" onClick={onSave} disabled={busy}>
+          <Save className="w-4 h-4" />{busy ? '保存中...' : (isNew ? '追加' : '保存')}
+        </Button>
+      </div>
+    </Card>
   )
 }
 
