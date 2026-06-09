@@ -5,6 +5,7 @@ import {
   ShieldCheck, AlertTriangle, BadgeCheck, Users,
   ChevronUp, ChevronDown, ChevronsUpDown,
   ScanLine, Loader2, ExternalLink, UploadCloud, CheckCircle2,
+  Eye, EyeOff, Copy, Check,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -689,11 +690,45 @@ function Field({ label, children }) {
 }
 const inputCls = 'w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:opacity-60'
 
+// メールパスワード入力欄：既定は伏字、目アイコンで表示切替、コピーボタン付き。
+function PasswordField({ value, onChange }) {
+  const [show, setShow] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    if (!value) return
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* クリップボード不可環境は無視 */ }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        className={inputCls + ' font-mono'}
+        type={show ? 'text' : 'password'}
+        value={value || ''}
+        autoComplete="new-password"
+        placeholder="未設定"
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button type="button" onClick={() => setShow((s) => !s)} title={show ? '隠す' : '表示'}
+        className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700">
+        {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+      <button type="button" onClick={copy} disabled={!value} title="コピー"
+        className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700 disabled:opacity-40">
+        {copied ? <Check className="w-4 h-4 text-success-500" /> : <Copy className="w-4 h-4" />}
+      </button>
+    </div>
+  )
+}
+
 // 社員詳細・編集モーダル（基本情報 / アプリ権限 / 資格）
 function EmployeeModal({ employee, isNew, canEdit, quals, suggestions = {}, onClose, onSaved, showToast }) {
   const [tab, setTab] = useState('basic')
   const [form, setForm] = useState({
-    name: '', furigana: '', email: '', job_type: '', department: '', company: '',
+    name: '', furigana: '', email: '', email_password: '', job_type: '', department: '', company: '',
     skill_id: '', gender: '', birth_date: '', hire_date: '', phone: '',
     postal_code: '', address: '',
     app_role: 'member', report_cc: false, is_active: true,
@@ -705,7 +740,7 @@ function EmployeeModal({ employee, isNew, canEdit, quals, suggestions = {}, onCl
   // null を空文字に直して input に渡せる形へ
   function sanitize(e) {
     const out = {}
-    for (const k of ['name', 'furigana', 'email', 'job_type', 'department', 'company', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'postal_code', 'address', 'app_role']) {
+    for (const k of ['name', 'furigana', 'email', 'email_password', 'job_type', 'department', 'company', 'skill_id', 'gender', 'birth_date', 'hire_date', 'phone', 'postal_code', 'address', 'app_role']) {
       if (e[k] != null) out[k] = e[k]
     }
     if (e.report_cc != null) out.report_cc = e.report_cc
@@ -797,6 +832,14 @@ function EmployeeModal({ employee, isNew, canEdit, quals, suggestions = {}, onCl
             <Field label="ふりがな"><input className={inputCls} value={form.furigana} disabled={!canEdit} onChange={(e) => set('furigana', e.target.value)} /></Field>
             <Field label="メールアドレス"><input className={inputCls} type="email" value={form.email} disabled={!canEdit} onChange={(e) => set('email', e.target.value)} /></Field>
             <Field label="電話番号"><input className={inputCls} value={form.phone} disabled={!canEdit} onChange={(e) => set('phone', e.target.value)} /></Field>
+            {/* メールパスワードは管理者のみ表示・編集（APIも管理者にのみ返す） */}
+            {canEdit && (
+              <div className="sm:col-span-2">
+                <Field label="メールパスワード（管理者のみ・社内メール設定用）">
+                  <PasswordField value={form.email_password} onChange={(v) => set('email_password', v)} />
+                </Field>
+              </div>
+            )}
             <Field label="会社"><input className={inputCls} list="dl-company" value={form.company} disabled={!canEdit} onChange={(e) => set('company', e.target.value)} /></Field>
             <Field label="職種"><input className={inputCls} list="dl-job_type" value={form.job_type} disabled={!canEdit} onChange={(e) => set('job_type', e.target.value)} /></Field>
             <Field label="部署"><input className={inputCls} list="dl-department" value={form.department} disabled={!canEdit} onChange={(e) => set('department', e.target.value)} /></Field>
