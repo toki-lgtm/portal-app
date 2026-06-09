@@ -17,6 +17,8 @@ import {
   Pin,
   Megaphone,
   AlertTriangle,
+  Gavel,
+  Trophy,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -25,6 +27,7 @@ import ThemeToggle from './components/ui/ThemeToggle'
 import SettingsPage from './components/SettingsPage'
 import EmployeesPage from './components/EmployeesPage'
 import AnnouncementsPage from './components/AnnouncementsPage'
+import BidsPage from './components/BidsPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -451,10 +454,76 @@ function AnnouncementsCard({ onOpenAnnouncements }) {
 }
 
 /**
+ * 入札案件のKPIセクション（入札担当のみ）。
+ * bidStats が取得できた場合だけ表示。クリックで入札案件管理ビューへ。
+ */
+function BidsKpiSection({ bidStats, onOpen }) {
+  const s = bidStats?.summary
+  if (!s) return null
+  const rate = s.win_rate_count?.rate
+  const nextBid = s.next_bid
+  const dueCount = s.due_soon?.length || 0
+
+  return (
+    <section className="mb-8">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex items-center gap-2 mb-4 group"
+      >
+        <Gavel className="w-5 h-5 text-brand-500" />
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white">入札案件の状況</h2>
+        <ArrowRight className="w-4 h-4 text-brand-400 group-hover:translate-x-0.5 transition" />
+      </button>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          icon={Activity}
+          iconClass="text-brand-500"
+          label="進行中"
+          value={s.in_progress}
+          unit="件"
+          sub={<span className="text-slate-400">うち積算中 {s.estimating} 件</span>}
+        />
+        <StatCard
+          icon={Clock}
+          iconClass="text-accent-500"
+          label="今月の入札"
+          value={s.bids_this_month}
+          unit="件"
+          sub={
+            nextBid ? (
+              <span className="text-slate-400 truncate block">次: {new Date(nextBid.bid_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })} {nextBid.project_name}</span>
+            ) : (
+              <span className="text-slate-400">予定なし</span>
+            )
+          }
+        />
+        <StatCard
+          icon={AlertTriangle}
+          iconClass={dueCount > 0 ? 'text-warning-500' : 'text-success-500'}
+          label="期限間近"
+          value={dueCount}
+          unit="件"
+          sub={<span className="text-slate-400">入札日が7日以内</span>}
+        />
+        <StatCard
+          icon={Trophy}
+          iconClass="text-success-500"
+          label="落札率（今年度）"
+          value={rate == null ? '—' : Math.round(rate * 100)}
+          unit={rate == null ? '' : '%'}
+          sub={<span className="text-slate-400">{s.win_rate_count.won}勝 / {s.win_rate_count.lost}敗</span>}
+        />
+      </div>
+    </section>
+  )
+}
+
+/**
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
-function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount }) {
+function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount }) {
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
@@ -535,6 +604,9 @@ function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, o
                 <StatsSection stats={stats} />
               </div>
             )}
+
+            {/* 入札案件の状況（入札担当のみ・bidStats取得時のみ表示） */}
+            <BidsKpiSection bidStats={bidStats} onOpen={() => onOpenInternal?.('bids')} />
 
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white">利用可能なアプリ</h2>
@@ -688,12 +760,14 @@ function AppContent() {
   const [user, setUser] = useState(null)
   const [apps, setApps] = useState([])
   const [stats, setStats] = useState(null)
+  // 入札KPI（入札担当のみ取得成功。権限なし/未デプロイ時は null のまま＝非表示）
+  const [bidStats, setBidStats] = useState(null)
   const [loading, setLoading] = useState(true)
   // サーバーから取得したユーザー設定。取得失敗時はデフォルト値を使う
   const [serverSettings, setServerSettings] = useState(DEFAULT_SERVER_SETTINGS)
   // 未読お知らせ数（通知ベル用）。APIが落ちても 0 にフォールバック
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
-  // 'dashboard' | 'settings' | 'employees' | 'announcements'
+  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids'
   const [view, setView] = useState('dashboard')
 
   // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
@@ -771,10 +845,21 @@ function AppContent() {
       }
     }
 
+    // 入札KPI。アクセス権がない場合は403で失敗するので静かに非表示（null のまま）
+    const fetchBidStats = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/bids/stats`, authConfig)
+        setBidStats(response.data)
+      } catch {
+        setBidStats(null)
+      }
+    }
+
     fetchApps()
     fetchStats()
     fetchUserSettings()
     fetchAnnouncementUnreadCount()
+    fetchBidStats()
   }, [user])
 
   const handleLogout = () => {
@@ -783,6 +868,7 @@ function AppContent() {
     setUser(null)
     setApps([])
     setStats(null)
+    setBidStats(null)
     setServerSettings(DEFAULT_SERVER_SETTINGS)
     setAnnouncementUnreadCount(0)
     setView('dashboard')
@@ -818,6 +904,10 @@ function AppContent() {
     return <AnnouncementsPage onBack={() => setView('dashboard')} />
   }
 
+  if (view === 'bids') {
+    return <BidsPage onBack={() => setView('dashboard')} />
+  }
+
   return (
     <DashboardPage
       user={user}
@@ -825,6 +915,7 @@ function AppContent() {
       apps={apps}
       loading={loading}
       stats={stats}
+      bidStats={bidStats}
       serverSettings={serverSettings}
       onOpenSettings={() => setView('settings')}
       onOpenInternal={(v) => setView(v || 'employees')}
