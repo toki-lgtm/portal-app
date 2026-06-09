@@ -645,7 +645,7 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   return (
     <ModalShell title={`束ねPDF・資格者証の一括取込（${files.length}ファイル）`} onClose={onClose} wide>
       <p className="text-xs text-slate-400 mb-4">
-        束ねPDF（資格一覧表・名簿・証書スキャン）から資格保有者を抽出しました。<br />
+        証書（合格証明書・免許証・修了証など）を読み取りました（資格一覧表・名簿は登録には使いません）。<br />
         <b className="text-slate-500 dark:text-slate-300">確実に照合できたものは自動で保存</b>し、
         判断が必要なもの（社員未照合・生年月日不一致・新規資格など）だけを「要確認」に表示します。
       </p>
@@ -687,7 +687,7 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
                       <ExternalLink className="w-3 h-3" />資格者証
                     </a>
                   )}
-                  {!r.certUrl && <span className="ml-auto text-slate-400">名簿のみ</span>}
+                  {!r.certUrl && <span className="ml-auto text-slate-400">画像なし</span>}
                 </li>
               )
             })}
@@ -762,7 +762,7 @@ function CertImportRow({ r, staffOptions, quals, onUpd, onRemove }) {
       return (
         <div className="w-24 h-24 rounded-md bg-slate-100 dark:bg-ink-700 shrink-0 flex flex-col items-center justify-center gap-1 border border-slate-200 dark:border-ink-600">
           <Award className="w-6 h-6 text-slate-300" />
-          <span className="text-[10px] text-slate-400 text-center leading-tight px-1">名簿<br />のみ</span>
+          <span className="text-[10px] text-slate-400 text-center leading-tight px-1">画像<br />なし</span>
         </div>
       )
     }
