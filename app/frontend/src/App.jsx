@@ -15,6 +15,8 @@ import {
   Bell,
   Star,
   Pin,
+  Megaphone,
+  AlertTriangle,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -22,6 +24,7 @@ import Card from './components/ui/Card'
 import ThemeToggle from './components/ui/ThemeToggle'
 import SettingsPage from './components/SettingsPage'
 import EmployeesPage from './components/EmployeesPage'
+import AnnouncementsPage from './components/AnnouncementsPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -255,9 +258,9 @@ function RecentActivity({ recent }) {
 
 /**
  * 通知ベルドロップダウン。
- * stats の awaiting_approval / issues_open を流用（新規API呼び出しなし）。
+ * stats の awaiting_approval / issues_open と未読お知らせ数を統合表示。
  */
-function NotificationBell({ stats, apps }) {
+function NotificationBell({ stats, apps, announcementUnreadCount, onOpenAnnouncements }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -270,7 +273,8 @@ function NotificationBell({ stats, apps }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const badgeCount = (stats?.awaiting_approval || 0) + (stats?.issues_open || 0)
+  const patrolCount = (stats?.awaiting_approval || 0) + (stats?.issues_open || 0)
+  const badgeCount = patrolCount + (announcementUnreadCount || 0)
 
   // 安全パトロールアプリの URL を apps から探す（名前で判定）
   const patrolApp = apps?.find(
@@ -299,6 +303,20 @@ function NotificationBell({ stats, apps }) {
             <p className="text-sm text-slate-400 text-center py-4">新しい通知はありません</p>
           ) : (
             <ul className="space-y-2">
+              {(announcementUnreadCount || 0) > 0 && (
+                <li className="flex items-center justify-between text-sm">
+                  <button
+                    className="flex items-center gap-2 flex-1 text-left"
+                    onClick={() => { setOpen(false); onOpenAnnouncements?.() }}
+                  >
+                    <Megaphone className="w-4 h-4 text-brand-500 shrink-0" />
+                    <span className="text-slate-700 dark:text-slate-300 hover:underline">未読のお知らせ</span>
+                  </button>
+                  <span className="font-bold text-brand-600 dark:text-brand-400">
+                    {announcementUnreadCount} 件
+                  </span>
+                </li>
+              )}
               {(stats?.awaiting_approval || 0) > 0 && (
                 <li className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
@@ -341,10 +359,102 @@ function NotificationBell({ stats, apps }) {
 }
 
 /**
+ * ダッシュボードのお知らせカード（上位3件）。
+ * APIが失敗しても表示が崩れないようtry/catchでフォールバック。
+ */
+function AnnouncementsCard({ onOpenAnnouncements }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const token = localStorage.getItem('authToken')
+    const fetchAnnouncements = async () => {
+      try {
+        const res = await fetch(`${apiUrl}/api/announcements`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        // ピン優先→新しい順で上位3件
+        const sorted = [...data].sort((a, b) => {
+          if (a.is_pinned && !b.is_pinned) return -1
+          if (!a.is_pinned && b.is_pinned) return 1
+          return new Date(b.publish_at || b.created_at) - new Date(a.publish_at || a.created_at)
+        })
+        setItems(sorted.slice(0, 3))
+      } catch {
+        // APIが落ちても既存ダッシュボードは壊さない
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchAnnouncements()
+  }, [])
+
+  const unreadCount = items.filter((a) => !a.is_read).length
+
+  return (
+    <Card className="p-6 h-full">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Megaphone className="w-5 h-5 text-brand-500" />
+          <h2 className="font-bold text-slate-900 dark:text-white">お知らせ</h2>
+          {unreadCount > 0 && (
+            <span className="w-5 h-5 rounded-full bg-accent-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+              {unreadCount > 9 ? '9+' : unreadCount}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onOpenAnnouncements}
+          className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+        >
+          一覧を見る <ArrowRight className="w-3 h-3" />
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400 py-4 text-center">読み込み中...</p>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-slate-400 py-6 text-center">お知らせはありません</p>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-ink-700">
+          {items.map((item) => (
+            <li
+              key={item.id}
+              className="flex items-start gap-3 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-ink-700/30 -mx-2 px-2 rounded-lg transition"
+              onClick={onOpenAnnouncements}
+            >
+              <div className="flex-1 min-w-0">
+                <div className={`text-sm truncate ${!item.is_read ? 'font-bold text-slate-900 dark:text-white' : 'font-medium text-slate-700 dark:text-slate-300'}`}>
+                  {item.is_pinned && <Pin className="w-3 h-3 inline mr-1 text-brand-400" />}
+                  {item.priority === 'important' && <AlertTriangle className="w-3 h-3 inline mr-1 text-warning-500" />}
+                  {item.title}
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  {item.author_name && <span className="mr-2">{item.author_name}</span>}
+                  {item.publish_at || item.created_at
+                    ? new Date(item.publish_at || item.created_at).toLocaleDateString('ja-JP')
+                    : ''}
+                </div>
+              </div>
+              {!item.is_read && (
+                <span className="w-2 h-2 rounded-full bg-accent-400 mt-1.5 shrink-0" />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+/**
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
-function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings, onOpenInternal }) {
+function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount }) {
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
@@ -378,8 +488,13 @@ function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, o
             </span>
 
             {/* 通知ベル（in_app_enabled のときのみ表示） */}
-            {inAppEnabled && stats && (
-              <NotificationBell stats={stats} apps={apps} />
+            {inAppEnabled && (
+              <NotificationBell
+                stats={stats}
+                apps={apps}
+                announcementUnreadCount={announcementUnreadCount}
+                onOpenAnnouncements={() => onOpenInternal?.('announcements')}
+              />
             )}
 
             <ThemeToggle />
@@ -530,23 +645,31 @@ function DashboardPage({ user, onLogout, apps, loading, stats, serverSettings, o
               </div>
             )}
 
-            {/* 最近の点検（show_kpi && statsが取得できた場合のみ表示） */}
-            {showKpi && stats && (
-              <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
-                <div className="lg:col-span-2">
-                  <RecentActivity recent={stats.recent || []} />
-                </div>
-                <div className="bg-gradient-to-br from-brand-700 to-brand-900 dark:from-brand-800 dark:to-ink-900 rounded-2xl p-6 text-white flex flex-col border border-transparent dark:border-ink-700">
-                  <ShieldCheck className="w-8 h-8 mb-3 text-accent-400" />
-                  <h3 className="font-bold text-lg mb-1">安全第一</h3>
-                  <p className="text-brand-100 dark:text-slate-300 text-sm flex-1">
-                    {stats.issues_open > 0
-                      ? `現在 ${stats.issues_open} 件の是正対応が進行中です。期限管理を徹底しましょう。`
-                      : '未対応の是正はありません。引き続き安全管理を継続しましょう。'}
-                  </p>
-                </div>
-              </section>
-            )}
+            {/* お知らせカード（常設）＋最近の点検 */}
+            <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
+              {/* お知らせ（常設・1列） */}
+              <div className={showKpi && stats ? '' : 'lg:col-span-3'}>
+                <AnnouncementsCard onOpenAnnouncements={() => onOpenInternal?.('announcements')} />
+              </div>
+
+              {/* 最近の点検（show_kpi && statsが取得できた場合のみ） */}
+              {showKpi && stats && (
+                <>
+                  <div>
+                    <RecentActivity recent={stats.recent || []} />
+                  </div>
+                  <div className="bg-gradient-to-br from-brand-700 to-brand-900 dark:from-brand-800 dark:to-ink-900 rounded-2xl p-6 text-white flex flex-col border border-transparent dark:border-ink-700">
+                    <ShieldCheck className="w-8 h-8 mb-3 text-accent-400" />
+                    <h3 className="font-bold text-lg mb-1">安全第一</h3>
+                    <p className="text-brand-100 dark:text-slate-300 text-sm flex-1">
+                      {stats.issues_open > 0
+                        ? `現在 ${stats.issues_open} 件の是正対応が進行中です。期限管理を徹底しましょう。`
+                        : '未対応の是正はありません。引き続き安全管理を継続しましょう。'}
+                    </p>
+                  </div>
+                </>
+              )}
+            </section>
           </>
         )}
       </main>
@@ -568,7 +691,9 @@ function AppContent() {
   const [loading, setLoading] = useState(true)
   // サーバーから取得したユーザー設定。取得失敗時はデフォルト値を使う
   const [serverSettings, setServerSettings] = useState(DEFAULT_SERVER_SETTINGS)
-  // 'dashboard' | 'settings'
+  // 未読お知らせ数（通知ベル用）。APIが落ちても 0 にフォールバック
+  const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
+  // 'dashboard' | 'settings' | 'employees' | 'announcements'
   const [view, setView] = useState('dashboard')
 
   // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
@@ -636,9 +761,20 @@ function AppContent() {
       }
     }
 
+    // 未読お知らせ数を取得。失敗しても既存表示に影響させない
+    const fetchAnnouncementUnreadCount = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/announcements/unread-count`, authConfig)
+        setAnnouncementUnreadCount(response.data?.count || 0)
+      } catch {
+        setAnnouncementUnreadCount(0)
+      }
+    }
+
     fetchApps()
     fetchStats()
     fetchUserSettings()
+    fetchAnnouncementUnreadCount()
   }, [user])
 
   const handleLogout = () => {
@@ -648,6 +784,7 @@ function AppContent() {
     setApps([])
     setStats(null)
     setServerSettings(DEFAULT_SERVER_SETTINGS)
+    setAnnouncementUnreadCount(0)
     setView('dashboard')
   }
 
@@ -677,6 +814,10 @@ function AppContent() {
     return <EmployeesPage onBack={() => setView('dashboard')} />
   }
 
+  if (view === 'announcements') {
+    return <AnnouncementsPage onBack={() => setView('dashboard')} />
+  }
+
   return (
     <DashboardPage
       user={user}
@@ -687,6 +828,7 @@ function AppContent() {
       serverSettings={serverSettings}
       onOpenSettings={() => setView('settings')}
       onOpenInternal={(v) => setView(v || 'employees')}
+      announcementUnreadCount={announcementUnreadCount}
     />
   )
 }
