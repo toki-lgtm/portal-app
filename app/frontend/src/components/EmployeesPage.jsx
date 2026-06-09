@@ -438,6 +438,27 @@ export default function EmployeesPage({ onBack }) {
   )
 }
 
+// 取込行が「確実（自動保存可）」かを判定する。
+// 確実 = 社員が自動照合され（match_method が none でない）、台帳の生年月日と矛盾せず、
+//        既存の資格マスタに一致している（新規資格の作成を伴わない）。
+// それ以外（社員未照合 / 生年月日不一致 / 新規資格 / 資格未選択 / 読取失敗）は「要確認」。
+function isConfidentRow(r) {
+  return r.saveState !== 'error'
+    && !!r.staffId && r.matchMethod !== 'none'
+    && !r.birthMismatch
+    && !!r.qualId && r.qualId !== '__new__'
+}
+
+// 要確認となった理由（ユーザーが何を判断すべきか）を返す。
+function reviewReason(r) {
+  if (r.saveState === 'error') return r.error || 'AI読取に失敗しました'
+  if (!r.staffId || r.matchMethod === 'none') return '社員を自動照合できませんでした'
+  if (r.birthMismatch) return '台帳の生年月日と一致しません'
+  if (r.qualId === '__new__') return '新規資格としての登録確認が必要です'
+  if (!r.qualId) return '資格を選択してください'
+  return '内容を確認してください'
+}
+
 // 資格者証の一括取込モーダル：
 // 束ねPDF（資格一覧表＋名簿＋証書スキャン）をアップすると、名簿・証書から
 // 資格×保有者の行を多数抽出。確認リストを資格見出しごとにグルーピングして表示し、
@@ -447,6 +468,7 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   const [scanning, setScanning] = useState(true)
   const [scanProgress, setScanProgress] = useState({ done: 0, total: files.length, rowCount: 0 })
   const [savingAll, setSavingAll] = useState(false)
+  const [autoSaving, setAutoSaving] = useState(false)
 
   // 社員ドロップダウン（ふりがな順）
   const staffOptions = useMemo(
@@ -526,10 +548,64 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   const upd = (id, patch) => setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)))
   const removeRow = (id) => setRows((rs) => rs.filter((r) => r.id !== id))
 
-  // 資格名でグルーピング（新規は newQualName、既存は quals から名前を引く）
+  // 1行を保存する共通処理（自動保存・確認保存の両方で使用）。
+  // 成否を { ok } / { ok:false, error } で返す（呼び出し側で行の状態を更新）。
+  const persistRow = async (r) => {
+    try {
+      let qid = r.qualId
+      if (qid === '__new__') {
+        const mres = await axios.post(`${apiUrl}/api/qualifications`,
+          { name: r.newQualName.trim(), category: r.newQualCategory || 'その他', has_expiry: !!r.expiry_date }, authConfig())
+        qid = mres.data.id
+      }
+      const body = {
+        qualification_id: qid,
+        acquired_date: r.acquired_date || undefined,
+        expiry_date: r.expiry_date || undefined,
+        cert_number: r.cert_number || undefined,
+        cert_image_path: r.certPath || undefined,
+      }
+      if (r.issuer) body.issuer = r.issuer
+      if (r.honseki) body.honseki = r.honseki
+      await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, body, authConfig())
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err.response?.data?.error || '保存に失敗' }
+    }
+  }
+
+  // スキャン完了後、確実な行だけを自動保存する。疑義のある行は残してユーザーに判断を委ねる。
+  const autoSavedRef = useRef(false)
+  useEffect(() => {
+    if (scanning || autoSavedRef.current) return
+    autoSavedRef.current = true
+    ;(async () => {
+      // rows は scanning が false になった時点で確定済み。
+      const targets = rows.filter((r) => r.saveState === 'pending' && isConfidentRow(r))
+      if (targets.length === 0) return
+      setAutoSaving(true)
+      let ok = 0, fail = 0
+      for (const r of targets) {
+        upd(r.id, { saveState: 'saving', error: '' })
+        const res = await persistRow(r)
+        if (res.ok) { upd(r.id, { saveState: 'done', autoSaved: true }); ok++ }
+        else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
+      }
+      setAutoSaving(false)
+      if (ok > 0) showToast('success', `確実な ${ok} 件を自動保存しました${fail ? `（${fail} 件は要確認に回しました）` : ''}`)
+    })()
+    // 多重実行は autoSavedRef で防止。rows/persistRow は意図的に依存に含めない。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning])
+
+  // 自動保存済みの行と、ユーザーの判断が必要な行（疑義あり）に振り分ける。
+  const autoSavedRows = useMemo(() => rows.filter((r) => r.autoSaved), [rows])
+  const reviewRows = useMemo(() => rows.filter((r) => !r.autoSaved), [rows])
+
+  // 要確認の行を資格名でグルーピング（新規は newQualName、既存は quals から名前を引く）
   const grouped = useMemo(() => {
     const map = new Map()
-    for (const r of rows) {
+    for (const r of reviewRows) {
       const key = r.qualId === '__new__'
         ? (r.newQualName || '（資格名未設定）')
         : r.qualId
@@ -539,53 +615,39 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
       map.get(key).push(r)
     }
     return [...map.entries()] // [ [qualName, rows[]] ]
-  }, [rows, quals])
+  }, [reviewRows, quals])
 
-  const saveAll = async () => {
+  // 要確認の行（疑義あり）をユーザーが修正したうえで保存する。
+  const saveReview = async () => {
     setSavingAll(true)
     let ok = 0, fail = 0
-    for (const r of rows) {
+    for (const r of reviewRows) {
       if (r.saveState === 'done') { ok++; continue }
-      // エラー行かつ certPath/certUrl 無し＆personName 無しのスキャン失敗行はスキップ
-      if (r.saveState === 'error' && !r.personName && !r.staffId) { fail++; continue }
+      // certPath/personName/staffId いずれも無いスキャン失敗行は黙ってスキップ
+      if (r.saveState === 'error' && !r.personName && !r.staffId) { continue }
       if (!r.staffId) { upd(r.id, { saveState: 'error', error: '社員を選択してください' }); fail++; continue }
       if (r.qualId === '__new__' && !r.newQualName.trim()) { upd(r.id, { saveState: 'error', error: '資格名を入力してください' }); fail++; continue }
       if (!r.qualId) { upd(r.id, { saveState: 'error', error: '資格を選択してください' }); fail++; continue }
       upd(r.id, { saveState: 'saving', error: '' })
-      try {
-        let qid = r.qualId
-        if (qid === '__new__') {
-          const mres = await axios.post(`${apiUrl}/api/qualifications`,
-            { name: r.newQualName.trim(), category: r.newQualCategory || 'その他', has_expiry: !!r.expiry_date }, authConfig())
-          qid = mres.data.id
-        }
-        const body = {
-          qualification_id: qid,
-          acquired_date: r.acquired_date || undefined,
-          expiry_date: r.expiry_date || undefined,
-          cert_number: r.cert_number || undefined,
-          cert_image_path: r.certPath || undefined,
-        }
-        if (r.issuer) body.issuer = r.issuer
-        if (r.honseki) body.honseki = r.honseki
-        await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, body, authConfig())
-        upd(r.id, { saveState: 'done' }); ok++
-      } catch (err) {
-        upd(r.id, { saveState: 'error', error: err.response?.data?.error || '保存に失敗' }); fail++
-      }
+      const res = await persistRow(r)
+      if (res.ok) { upd(r.id, { saveState: 'done' }); ok++ }
+      else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
     }
     setSavingAll(false)
     showToast(fail ? 'error' : 'success', `保存しました（成功 ${ok} 件${fail ? ` / 失敗 ${fail} 件` : ''}）`)
     if (fail === 0) onSaved()
   }
 
-  const savable = rows.some((r) => r.saveState !== 'done')
+  const savable = reviewRows.some((r) => r.saveState !== 'done')
+
+  const busy = scanning || autoSaving
 
   return (
     <ModalShell title={`束ねPDF・資格者証の一括取込（${files.length}ファイル）`} onClose={onClose} wide>
       <p className="text-xs text-slate-400 mb-4">
         束ねPDF（資格一覧表・名簿・証書スキャン）から資格保有者を抽出しました。<br />
-        社員と資格の内容を確認・修正してから「すべて保存」してください。名簿のみの行（証書画像なし）も資格保有として登録されます。
+        <b className="text-slate-500 dark:text-slate-300">確実に照合できたものは自動で保存</b>し、
+        判断が必要なもの（社員未照合・生年月日不一致・新規資格など）だけを「要確認」に表示します。
       </p>
 
       {scanning && (
@@ -595,8 +657,51 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
           {scanProgress.rowCount > 0 ? `・${scanProgress.rowCount}件抽出済み` : ''}）
         </div>
       )}
+      {autoSaving && (
+        <div className="flex items-center gap-2 text-sm text-success-600 mb-3">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          確実な項目を自動保存中...
+        </div>
+      )}
 
-      {/* 資格見出しごとにグループ表示 */}
+      {/* 自動保存済み（確実な行）。畳んで件数だけ見せ、内訳は展開で確認できる。 */}
+      {autoSavedRows.length > 0 && (
+        <details className="mb-5 rounded-lg border border-success-200 dark:border-success-500/30 bg-success-50/60 dark:bg-success-500/10">
+          <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-success-700 dark:text-success-300 flex items-center gap-2">
+            <BadgeCheck className="w-4 h-4" />
+            自動保存済み {autoSavedRows.length} 件（クリックで内訳）
+          </summary>
+          <ul className="px-3 pb-2 divide-y divide-success-100 dark:divide-success-500/20">
+            {autoSavedRows.map((r) => {
+              const qn = r.qualId === '__new__'
+                ? r.newQualName
+                : (quals.find((q) => String(q.id) === String(r.qualId))?.name || r.newQualName || '')
+              return (
+                <li key={r.id} className="flex items-center gap-2 py-1.5 text-xs text-slate-600 dark:text-slate-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-success-500 shrink-0" />
+                  <span className="font-medium">{r.matched_staff_name || r.personName}</span>
+                  <span className="text-slate-400">/ {qn}</span>
+                  {r.certUrl && (
+                    <a href={r.certUrl} target="_blank" rel="noreferrer"
+                      className="ml-auto inline-flex items-center gap-0.5 text-brand-500 hover:underline">
+                      <ExternalLink className="w-3 h-3" />資格者証
+                    </a>
+                  )}
+                  {!r.certUrl && <span className="ml-auto text-slate-400">名簿のみ</span>}
+                </li>
+              )
+            })}
+          </ul>
+        </details>
+      )}
+
+      {/* 要確認（疑義あり）。資格見出しごとにグループ表示 */}
+      {grouped.length > 0 && (
+        <div className="flex items-center gap-2 mb-2 text-sm font-semibold text-warning-600 dark:text-warning-400">
+          <AlertTriangle className="w-4 h-4" />
+          要確認 {reviewRows.filter((r) => r.saveState !== 'done').length} 件 — 内容を確認して保存してください
+        </div>
+      )}
       <div className="space-y-5">
         {grouped.map(([qualName, groupRows]) => (
           <div key={qualName}>
@@ -621,16 +726,21 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
             </div>
           </div>
         ))}
-        {!scanning && rows.length === 0 && (
+        {!busy && rows.length === 0 && (
           <p className="text-sm text-slate-400 py-6 text-center">読み取れる資格・保有者がありませんでした</p>
+        )}
+        {!busy && rows.length > 0 && grouped.length === 0 && (
+          <p className="text-sm text-success-600 py-6 text-center flex items-center justify-center gap-2">
+            <BadgeCheck className="w-5 h-5" />すべて自動保存しました。確認が必要な項目はありません。
+          </p>
         )}
       </div>
 
       <div className="flex justify-end gap-2 mt-5">
         <Button variant="ghost" size="sm" onClick={onClose}>閉じる</Button>
-        <Button variant="primary" size="sm" onClick={saveAll} disabled={scanning || savingAll || !savable}>
+        <Button variant="primary" size="sm" onClick={saveReview} disabled={busy || savingAll || !savable}>
           {savingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          {savingAll ? '保存中...' : 'すべて保存'}
+          {savingAll ? '保存中...' : '確認分を保存'}
         </Button>
       </div>
     </ModalShell>
@@ -640,46 +750,71 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
 // 取込行の1件UI
 function CertImportRow({ r, staffOptions, quals, onUpd, onRemove }) {
   const upd = (patch) => onUpd(r.id, patch)
+  const [zoom, setZoom] = useState(false) // 資格者証の拡大表示（判断材料）
 
-  // 証書プレビュー部分
+  const looksLikePdf = r.certUrl && (r.certIsPdf || /\.pdf($|\?)/i.test(r.certUrl))
+
+  // 証書プレビュー部分。疑義のある行では大きめに表示し、画像はクリックで拡大して
+  // 判断材料として確認できるようにする。
   const renderPreview = () => {
     if (!r.certUrl) {
       // 名簿のみ（証書画像なし）
       return (
-        <div className="w-16 h-16 rounded-md bg-slate-100 dark:bg-ink-700 shrink-0 flex flex-col items-center justify-center gap-1 border border-slate-200 dark:border-ink-600">
-          <Award className="w-5 h-5 text-slate-300" />
-          <span className="text-[9px] text-slate-400 text-center leading-tight px-1">名簿<br />のみ</span>
+        <div className="w-24 h-24 rounded-md bg-slate-100 dark:bg-ink-700 shrink-0 flex flex-col items-center justify-center gap-1 border border-slate-200 dark:border-ink-600">
+          <Award className="w-6 h-6 text-slate-300" />
+          <span className="text-[10px] text-slate-400 text-center leading-tight px-1">名簿<br />のみ</span>
         </div>
       )
     }
     // certIsPdf=true か URL が .pdf なら「原本を開く」リンク
-    const looksLikePdf = r.certIsPdf || /\.pdf($|\?)/i.test(r.certUrl)
     if (looksLikePdf) {
       return (
         <a
           href={r.certUrl}
           target="_blank"
           rel="noreferrer"
-          className="w-16 h-16 rounded-md bg-brand-50 dark:bg-brand-500/10 shrink-0 flex flex-col items-center justify-center gap-1 border border-brand-100 dark:border-brand-500/20 hover:bg-brand-100 dark:hover:bg-brand-500/20 transition"
+          className="w-24 h-24 rounded-md bg-brand-50 dark:bg-brand-500/10 shrink-0 flex flex-col items-center justify-center gap-1 border border-brand-100 dark:border-brand-500/20 hover:bg-brand-100 dark:hover:bg-brand-500/20 transition"
           title="原本を開く"
         >
-          <ExternalLink className="w-5 h-5 text-brand-500" />
-          <span className="text-[9px] text-brand-500 text-center leading-tight">原本を<br />開く</span>
+          <ExternalLink className="w-6 h-6 text-brand-500" />
+          <span className="text-[10px] text-brand-500 text-center leading-tight">原本を<br />開く</span>
         </a>
       )
     }
-    // 画像サムネ
+    // 画像サムネ（クリックで拡大）
     return (
-      <img
-        src={r.certUrl}
-        alt=""
-        className="w-16 h-16 object-cover rounded-md border border-slate-200 dark:border-ink-600 shrink-0"
-      />
+      <button type="button" onClick={() => setZoom(true)}
+        className="relative w-24 h-24 shrink-0 group" title="クリックで拡大">
+        <img src={r.certUrl} alt="資格者証"
+          className="w-24 h-24 object-cover rounded-md border border-slate-200 dark:border-ink-600" />
+        <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/0 group-hover:bg-black/30 transition">
+          <Eye className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition" />
+        </span>
+      </button>
     )
   }
 
   return (
     <Card className="p-3 bg-slate-50 dark:bg-ink-900/40">
+      {/* 拡大ライトボックス（判断材料の資格者証） */}
+      {zoom && r.certUrl && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setZoom(false)}>
+          <img src={r.certUrl} alt="資格者証（拡大）"
+            className="max-w-full max-h-full object-contain rounded-md shadow-2xl" />
+          <button type="button" onClick={() => setZoom(false)}
+            className="absolute top-4 right-4 text-white/90 hover:text-white p-2" title="閉じる">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+      )}
+      {/* 要確認の理由バナー（判断ポイントを明示） */}
+      {r.saveState !== 'done' && (
+        <div className="mb-2 flex items-start gap-1.5 text-xs text-warning-700 dark:text-warning-300 bg-warning-50 dark:bg-warning-500/10 border border-warning-200 dark:border-warning-500/20 rounded px-2 py-1">
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>要確認: {reviewReason(r)}{r.certUrl && !looksLikePdf ? '（左の資格者証をクリックで拡大）' : ''}</span>
+        </div>
+      )}
       <div className="flex gap-3">
         {renderPreview()}
         <div className="flex-1 min-w-0">
