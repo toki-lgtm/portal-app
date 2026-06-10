@@ -148,10 +148,10 @@ const EMPTY_FORM = {
   status: 'collecting',
   notice_date: '', question_due: '', bid_start_date: '', bid_date: '', opening_date: '',
   budget_price: '', our_estimate: '', awarded_price: '', awarded_company: '',
-  staff_id: '', note: '', remarks: '', reason: '',
+  note: '', remarks: '', reason: '',
 }
 
-function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
+function BidFormModal({ item, onClose, onSaved, showToast }) {
   const isNew = !item?.id
   const [form, setForm] = useState(() => {
     if (!item) return EMPTY_FORM
@@ -164,7 +164,7 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
       bid_start_date: item.bid_start_date || '', bid_date: item.bid_date || '', opening_date: item.opening_date || '',
       budget_price: pick(item.budget_price), our_estimate: pick(item.our_estimate),
       awarded_price: pick(item.awarded_price), awarded_company: pick(item.awarded_company),
-      staff_id: pick(item.staff_id), note: pick(item.note),
+      note: pick(item.note),
       remarks: pick(item.remarks), reason: pick(item.reason),
     }
   })
@@ -331,12 +331,6 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
           <Field label="ステータス">
             <select className={inputCls} value={form.status} onChange={(e) => set('status', e.target.value)}>
               {STATUS_DEFS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-            </select>
-          </Field>
-          <Field label="担当">
-            <select className={inputCls} value={form.staff_id} onChange={(e) => set('staff_id', e.target.value)}>
-              <option value="">（未割当）</option>
-              {staffList.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </Field>
         </div>
@@ -562,7 +556,6 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
           <Row label="工事場所" value={bid.location} />
           <Row label="工種" value={bid.work_type} />
           <Row label="入札方式" value={bid.bid_method} />
-          <Row label="担当" value={bid.staff_name} />
           <Row label="公告日" value={fmtDate(bid.notice_date)} />
           <Row label="質問期限" value={fmtDate(bid.question_due)} />
           {bid.bid_start_date
@@ -703,7 +696,7 @@ function AnalyticsTab({ showToast }) {
 
   const s = stats.summary
   const maxTotal = Math.max(1, ...stats.by_group.map((g) => g.total))
-  const groupLabel = { client: '発注者別', work_type: '工種別', staff: '担当者別' }
+  const groupLabel = { client: '発注者別', work_type: '工種別' }
 
   return (
     <div>
@@ -715,7 +708,6 @@ function AnalyticsTab({ showToast }) {
         <select className={inputCls + ' w-auto'} value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
           <option value="client">発注者別</option>
           <option value="work_type">工種別</option>
-          <option value="staff">担当者別</option>
         </select>
         <span className="text-xs text-slate-400">対象: {fmtDate(stats.period.from)} 〜 {fmtDate(stats.period.to)}</span>
       </div>
@@ -772,10 +764,8 @@ export default function BidsPage({ onBack }) {
   const [tab, setTab] = useState('list') // 'list' | 'analytics'
   const [bids, setBids] = useState([])
   const [loading, setLoading] = useState(true)
-  const [staffList, setStaffList] = useState([])
 
   const [statusFilter, setStatusFilter] = useState('')
-  const [staffFilter, setStaffFilter] = useState('')
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('bid_date')
 
@@ -792,7 +782,6 @@ export default function BidsPage({ onBack }) {
     try {
       const params = new URLSearchParams()
       if (statusFilter) params.set('status', statusFilter)
-      if (staffFilter) params.set('staff_id', staffFilter)
       if (search.trim()) params.set('q', search.trim())
       if (sort) params.set('sort', sort)
       const res = await axios.get(`${apiUrl}/api/bids?${params}`, authConfig())
@@ -802,14 +791,7 @@ export default function BidsPage({ onBack }) {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, staffFilter, search, sort, showToast])
-
-  useEffect(() => {
-    // 担当ドロップダウン用に社員一覧を取得（マスターは認証不要のエンドポイント）
-    axios.get(`${apiUrl}/api/masters/staff`)
-      .then((res) => setStaffList(res.data || []))
-      .catch(() => setStaffList([]))
-  }, [])
+  }, [statusFilter, search, sort, showToast])
 
   useEffect(() => {
     setLoading(true)
@@ -880,10 +862,6 @@ export default function BidsPage({ onBack }) {
                 <option value="">全ステータス</option>
                 {STATUS_DEFS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
               </select>
-              <select className={inputCls + ' w-auto'} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
-                <option value="">全担当</option>
-                {staffList.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
               <select className={inputCls + ' w-auto'} value={sort} onChange={(e) => setSort(e.target.value)}>
                 <option value="bid_date">入札締切日順</option>
                 <option value="created_at">登録が新しい順</option>
@@ -908,7 +886,6 @@ export default function BidsPage({ onBack }) {
                         <th className="px-4 py-3 font-semibold">発注者</th>
                         <th className="px-4 py-3 font-semibold whitespace-nowrap">入札締切</th>
                         <th className="px-4 py-3 font-semibold">状態</th>
-                        <th className="px-4 py-3 font-semibold">担当</th>
                         <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">自社見積</th>
                       </tr>
                     </thead>
@@ -931,7 +908,6 @@ export default function BidsPage({ onBack }) {
                               </span>
                             </td>
                             <td className="px-4 py-3"><StatusBadge status={b.status} /></td>
-                            <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{b.staff_name || '—'}</td>
                             <td className="px-4 py-3 text-right tabular-nums text-slate-700 dark:text-slate-300">{fmtYen(b.our_estimate)}</td>
                           </tr>
                         )
@@ -958,7 +934,6 @@ export default function BidsPage({ onBack }) {
       {editing !== null && (
         <BidFormModal
           item={editing?.id ? editing : null}
-          staffList={staffList}
           onClose={() => setEditing(null)}
           onSaved={loadBids}
           showToast={showToast}
