@@ -146,9 +146,9 @@ function extractedToForm(fields) {
 const EMPTY_FORM = {
   project_name: '', client_name: '', location: '', work_type: '', bid_method: '',
   status: 'collecting',
-  notice_date: '', question_due: '', bid_date: '', opening_date: '',
+  notice_date: '', question_due: '', bid_start_date: '', bid_date: '', opening_date: '',
   budget_price: '', our_estimate: '', awarded_price: '', awarded_company: '',
-  staff_id: '', note: '',
+  staff_id: '', note: '', remarks: '', reason: '',
 }
 
 function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
@@ -161,10 +161,11 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
       location: pick(item.location), work_type: pick(item.work_type), bid_method: pick(item.bid_method),
       status: item.status || 'collecting',
       notice_date: item.notice_date || '', question_due: item.question_due || '',
-      bid_date: item.bid_date || '', opening_date: item.opening_date || '',
+      bid_start_date: item.bid_start_date || '', bid_date: item.bid_date || '', opening_date: item.opening_date || '',
       budget_price: pick(item.budget_price), our_estimate: pick(item.our_estimate),
       awarded_price: pick(item.awarded_price), awarded_company: pick(item.awarded_company),
       staff_id: pick(item.staff_id), note: pick(item.note),
+      remarks: pick(item.remarks), reason: pick(item.reason),
     }
   })
   const [saving, setSaving] = useState(false)
@@ -342,20 +343,24 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
 
         <div className="border-t border-slate-100 dark:border-ink-700 pt-4">
           <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-3">日程</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             <Field label="公告日">
               <input type="date" className={inputCls} value={form.notice_date} onChange={(e) => set('notice_date', e.target.value)} />
             </Field>
             <Field label="質問期限">
               <input type="date" className={inputCls} value={form.question_due} onChange={(e) => set('question_due', e.target.value)} />
             </Field>
-            <Field label="入札日">
-              <input type="date" className={inputCls} value={form.bid_date} onChange={(e) => set('bid_date', e.target.value)} />
-            </Field>
             <Field label="開札日">
               <input type="date" className={inputCls} value={form.opening_date} onChange={(e) => set('opening_date', e.target.value)} />
             </Field>
+            <Field label="入札開始日">
+              <input type="date" className={inputCls} value={form.bid_start_date} onChange={(e) => set('bid_start_date', e.target.value)} />
+            </Field>
+            <Field label="入札締切日">
+              <input type="date" className={inputCls} value={form.bid_date} onChange={(e) => set('bid_date', e.target.value)} />
+            </Field>
           </div>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">札入れに期間がある案件は「入札開始日」と「入札締切日」の両方を入力（単日入札は締切日のみで可）。</p>
         </div>
 
         <div className="border-t border-slate-100 dark:border-ink-700 pt-4">
@@ -376,7 +381,16 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
           </div>
         </div>
 
-        <Field label="メモ">
+        <div className="border-t border-slate-100 dark:border-ink-700 pt-4 grid grid-cols-1 gap-4">
+          <Field label="備考（通知書記載）">
+            <textarea className={inputCls + ' min-h-[60px] resize-y'} value={form.remarks} onChange={(e) => set('remarks', e.target.value)} placeholder="例: 入札参加者が1者となった場合は、当該入札は取り止めます。" />
+          </Field>
+          <Field label="理由（通知書記載）">
+            <textarea className={inputCls + ' min-h-[60px] resize-y'} value={form.reason} onChange={(e) => set('reason', e.target.value)} />
+          </Field>
+        </div>
+
+        <Field label="メモ（社内）">
           <textarea className={inputCls + ' min-h-[80px] resize-y'} value={form.note} onChange={(e) => set('note', e.target.value)} />
         </Field>
       </div>
@@ -551,11 +565,32 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
           <Row label="担当" value={bid.staff_name} />
           <Row label="公告日" value={fmtDate(bid.notice_date)} />
           <Row label="質問期限" value={fmtDate(bid.question_due)} />
-          <Row label="入札日" value={fmtDate(bid.bid_date)} />
+          {bid.bid_start_date
+            ? <Row label="入札期間" value={`${fmtDate(bid.bid_start_date)} 〜 ${fmtDate(bid.bid_date)}`} />
+            : <Row label="入札締切日" value={fmtDate(bid.bid_date)} />}
           <Row label="開札日" value={fmtDate(bid.opening_date)} />
+          {bid.remarks && (
+            <div className="mt-3">
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">備考</p>
+              <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-xl p-3">
+                {bid.remarks}
+              </div>
+            </div>
+          )}
+          {bid.reason && (
+            <div className="mt-3">
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">理由</p>
+              <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-xl p-3">
+                {bid.reason}
+              </div>
+            </div>
+          )}
           {bid.note && (
-            <div className="mt-3 text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-xl p-3">
-              {bid.note}
+            <div className="mt-3">
+              <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">メモ（社内）</p>
+              <div className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-xl p-3">
+                {bid.note}
+              </div>
             </div>
           )}
         </div>
@@ -850,7 +885,7 @@ export default function BidsPage({ onBack }) {
                 {staffList.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
               <select className={inputCls + ' w-auto'} value={sort} onChange={(e) => setSort(e.target.value)}>
-                <option value="bid_date">入札日順</option>
+                <option value="bid_date">入札締切日順</option>
                 <option value="created_at">登録が新しい順</option>
                 <option value="project_name">工事名順</option>
               </select>
@@ -871,7 +906,7 @@ export default function BidsPage({ onBack }) {
                       <tr className="text-left text-xs text-slate-400 border-b border-slate-100 dark:border-ink-700">
                         <th className="px-4 py-3 font-semibold">工事名</th>
                         <th className="px-4 py-3 font-semibold">発注者</th>
-                        <th className="px-4 py-3 font-semibold whitespace-nowrap">入札日</th>
+                        <th className="px-4 py-3 font-semibold whitespace-nowrap">入札締切</th>
                         <th className="px-4 py-3 font-semibold">状態</th>
                         <th className="px-4 py-3 font-semibold">担当</th>
                         <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">自社見積</th>
