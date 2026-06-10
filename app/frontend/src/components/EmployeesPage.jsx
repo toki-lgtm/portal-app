@@ -570,8 +570,8 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
       }
       if (r.issuer) body.issuer = r.issuer
       if (r.honseki) body.honseki = r.honseki
-      await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, body, authConfig())
-      return { ok: true }
+      const resp = await axios.post(`${apiUrl}/api/employees/${r.staffId}/qualifications`, body, authConfig())
+      return { ok: true, action: resp.data?._action || 'inserted' }
     } catch (err) {
       return { ok: false, error: err.response?.data?.error || '保存に失敗' }
     }
@@ -587,15 +587,19 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
       const targets = rows.filter((r) => r.saveState === 'pending' && isConfidentRow(r))
       if (targets.length === 0) return
       setAutoSaving(true)
-      let ok = 0, fail = 0
+      let ok = 0, fail = 0, updated = 0, kept = 0
       for (const r of targets) {
         upd(r.id, { saveState: 'saving', error: '' })
         const res = await persistRow(r)
-        if (res.ok) { upd(r.id, { saveState: 'done', autoSaved: true }); ok++ }
-        else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
+        if (res.ok) {
+          upd(r.id, { saveState: 'done', autoSaved: true, action: res.action }); ok++
+          if (res.action === 'updated') updated++
+          else if (res.action === 'kept') kept++
+        } else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
       }
       setAutoSaving(false)
-      if (ok > 0) showToast('success', `確実な ${ok} 件を自動保存しました${fail ? `（${fail} 件は要確認に回しました）` : ''}`)
+      const extra = [updated ? `更新 ${updated} 件` : '', kept ? `据置 ${kept} 件` : ''].filter(Boolean).join('・')
+      if (ok > 0) showToast('success', `確実な ${ok} 件を自動保存${extra ? `（${extra}）` : ''}${fail ? ` / ${fail} 件は要確認` : ''}`)
     })()
     // 多重実行は autoSavedRef で防止。rows/persistRow は意図的に依存に含めない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -621,7 +625,7 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   // 要確認の行（疑義あり）をユーザーが修正したうえで保存する。
   const saveReview = async () => {
     setSavingAll(true)
-    let ok = 0, fail = 0
+    let ok = 0, fail = 0, updated = 0, kept = 0
     for (const r of reviewRows) {
       if (r.saveState === 'done') { ok++; continue }
       // certPath/personName/staffId いずれも無いスキャン失敗行は黙ってスキップ
@@ -631,11 +635,15 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
       if (!r.qualId) { upd(r.id, { saveState: 'error', error: '資格を選択してください' }); fail++; continue }
       upd(r.id, { saveState: 'saving', error: '' })
       const res = await persistRow(r)
-      if (res.ok) { upd(r.id, { saveState: 'done' }); ok++ }
-      else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
+      if (res.ok) {
+        upd(r.id, { saveState: 'done', action: res.action }); ok++
+        if (res.action === 'updated') updated++
+        else if (res.action === 'kept') kept++
+      } else { upd(r.id, { saveState: 'error', error: res.error }); fail++ }
     }
     setSavingAll(false)
-    showToast(fail ? 'error' : 'success', `保存しました（成功 ${ok} 件${fail ? ` / 失敗 ${fail} 件` : ''}）`)
+    const extra = [updated ? `更新 ${updated} 件` : '', kept ? `据置 ${kept} 件` : ''].filter(Boolean).join('・')
+    showToast(fail ? 'error' : 'success', `保存しました（成功 ${ok} 件${extra ? `／${extra}` : ''}${fail ? ` / 失敗 ${fail} 件` : ''}）`)
     if (fail === 0) onSaved()
   }
 
