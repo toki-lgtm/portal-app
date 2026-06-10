@@ -499,6 +499,8 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
               fileName: file.name,
               saveState: 'pending',
               error: '',
+              // グルーピング用の固定キー（編集中の資格名で再グループ化＝再マウントしないよう、取込時に確定）
+              groupKey: rec.qualification_name || '（資格名未設定）',
               // APIフィールドをそのままマッピング
               source: rec.source || 'certificate',
               personName: rec.person_name || '',
@@ -529,6 +531,7 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
             fileName: file.name,
             saveState: 'error',
             error: err.response?.data?.error || `${file.name}: AI読取に失敗`,
+            groupKey: '（読取失敗）',
             source: 'certificate', personName: '', staffId: '', matchMethod: 'none',
             qualId: '', newQualName: '', newQualCategory: 'その他',
             acquired_date: '', expiry_date: '', cert_number: '',
@@ -602,20 +605,18 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
   const autoSavedRows = useMemo(() => rows.filter((r) => r.autoSaved), [rows])
   const reviewRows = useMemo(() => rows.filter((r) => !r.autoSaved), [rows])
 
-  // 要確認の行を資格名でグルーピング（新規は newQualName、既存は quals から名前を引く）
+  // 要確認の行を「取込時に確定した固定キー(groupKey)」でグルーピングする。
+  // 編集中の資格名でグループ化すると1文字打つたびにグループが変わり、行（入力欄）が
+  // 再マウントしてフォーカスが外れるため、groupKey は編集に影響されない固定値にしている。
   const grouped = useMemo(() => {
     const map = new Map()
     for (const r of reviewRows) {
-      const key = r.qualId === '__new__'
-        ? (r.newQualName || '（資格名未設定）')
-        : r.qualId
-          ? (quals.find((q) => String(q.id) === String(r.qualId))?.name || r.newQualName || r.qualId)
-          : (r.newQualName || '（資格名未設定）')
+      const key = r.groupKey || '（資格名未設定）'
       if (!map.has(key)) map.set(key, [])
       map.get(key).push(r)
     }
-    return [...map.entries()] // [ [qualName, rows[]] ]
-  }, [reviewRows, quals])
+    return [...map.entries()] // [ [groupKey, rows[]] ]
+  }, [reviewRows])
 
   // 要確認の行（疑義あり）をユーザーが修正したうえで保存する。
   const saveReview = async () => {
