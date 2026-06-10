@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, Pencil, Trash2, X, Save, Search, Loader2, Gavel,
   FileText, Upload, Download, Clock, BarChart3, ListChecks, AlertTriangle,
+  Sparkles,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -114,6 +115,31 @@ function StatusBadge({ status }) {
   return <Badge tone={def.tone}>{def.label}</Badge>
 }
 
+// ファイル名から資料種別を推定（添付保存時の doc_type）
+function guessDocType(name) {
+  const n = name || ''
+  if (/図面|設計図/.test(n)) return '図面'
+  if (/設計書|設計図書/.test(n)) return '設計書'
+  if (/仕様|特記/.test(n)) return '仕様書'
+  return 'その他'
+}
+// バイト数を読みやすく
+function fmtBytes(b) {
+  if (b == null) return ''
+  if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`
+  if (b >= 1024) return `${Math.round(b / 1024)}KB`
+  return `${b}B`
+}
+// 抽出結果（null/空を除く）をフォームに反映するための整形
+function extractedToForm(fields) {
+  const out = {}
+  for (const [k, v] of Object.entries(fields || {})) {
+    if (v == null || v === '') continue
+    out[k] = String(v)
+  }
+  return out
+}
+
 // ──────────────────────────────────────────────
 // 新規/編集フォームモーダル
 // ──────────────────────────────────────────────
@@ -144,13 +170,72 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
+  // 新規登録時のみ: アップロード資料と AI 自動入力
+  const [files, setFiles] = useState([])           // 添付予定のファイル（File[]）
+  const [extracting, setExtracting] = useState(false)
+  const [extractInfo, setExtractInfo] = useState(null) // 読み取りに使った書類名など
+
+  const addFiles = (fileList) => {
+    const incoming = Array.from(fileList || [])
+    if (!incoming.length) return
+    setFiles((prev) => {
+      // 同名・同サイズの重複は除外
+      const key = (f) => `${f.name}__${f.size}`
+      const seen = new Set(prev.map(key))
+      return [...prev, ...incoming.filter((f) => !seen.has(key(f)))]
+    })
+  }
+  const removeFile = (idx) => setFiles((prev) => prev.filter((_, i) => i !== idx))
+
+  // 資料を AI に読ませてフォームへ反映
+  const extract = async () => {
+    if (!files.length) { showToast('error', '先に資料をアップロードしてください'); return }
+    setExtracting(true)
+    setExtractInfo(null)
+    try {
+      const fd = new FormData()
+      files.forEach((f) => fd.append('files', f))
+      const res = await axios.post(`${apiUrl}/api/bids/extract`, fd, authConfig())
+      const patch = extractedToForm(res.data.fields)
+      if (Object.keys(patch).length === 0) {
+        showToast('error', '資料から案件情報を読み取れませんでした。手入力してください')
+      } else {
+        setForm((f) => ({ ...f, ...patch }))
+        setExtractInfo({ used: res.data.used_files || [] })
+        showToast('success', '資料から自動入力しました。内容を確認してください')
+      }
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '資料の読み取りに失敗しました')
+    } finally {
+      setExtracting(false)
+    }
+  }
+
   const save = async () => {
     if (!form.project_name.trim()) { showToast('error', '工事名は必須です'); return }
     setSaving(true)
     try {
       if (isNew) {
-        await axios.post(`${apiUrl}/api/bids`, form, authConfig())
-        showToast('success', '案件を登録しました')
+        const res = await axios.post(`${apiUrl}/api/bids`, form, authConfig())
+        const newId = res.data?.id
+        // アップロード済みの資料を新規案件に添付
+        if (newId && files.length) {
+          let failed = 0
+          for (const f of files) {
+            try {
+              const fd = new FormData()
+              fd.append('file', f)
+              fd.append('doc_type', guessDocType(f.name))
+              await axios.post(`${apiUrl}/api/bids/${newId}/documents`, fd, authConfig())
+            } catch {
+              failed += 1
+            }
+          }
+          showToast(failed ? 'error' : 'success',
+            failed ? `案件は登録しましたが ${failed} 件の資料添付に失敗しました` : '案件を登録し、資料を添付しました')
+        } else {
+          showToast('success', '案件を登録しました')
+        }
       } else {
         await axios.put(`${apiUrl}/api/bids/${item.id}`, form, authConfig())
         showToast('success', '案件を更新しました')
@@ -166,6 +251,64 @@ function BidFormModal({ item, staffList, onClose, onSaved, showToast }) {
 
   return (
     <ModalShell title={isNew ? '入札案件を登録' : '入札案件を編集'} onClose={onClose} wide>
+      {isNew && (
+        <div className="mb-5 rounded-2xl border border-brand-200 dark:border-brand-500/30 bg-brand-50/60 dark:bg-brand-500/10 p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+            <p className="text-sm font-bold text-brand-700 dark:text-brand-300">資料から自動入力</p>
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            指名通知・公告・設計書などの資料をアップロードすると、AIが工事名・発注者・日程などを読み取って下のフォームに入力します。アップした資料はそのまま案件に添付されます。
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
+              <Upload className="w-4 h-4" />
+              資料を選択
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { addFiles(e.target.files); e.target.value = '' }}
+              />
+            </label>
+            <Button variant="primary" size="sm" onClick={extract} disabled={extracting || files.length === 0}>
+              {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              {extracting ? '読み取り中...' : '資料から自動入力'}
+            </Button>
+            {files.length > 0 && (
+              <span className="text-xs text-slate-400">{files.length}件の資料</span>
+            )}
+          </div>
+
+          {files.length > 0 && (
+            <ul className="mt-3 space-y-1">
+              {files.map((f, i) => (
+                <li key={`${f.name}-${i}`} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                  <FileText className="w-3.5 h-3.5 text-brand-500 shrink-0" />
+                  <span className="flex-1 min-w-0 truncate">{f.name}</span>
+                  <span className="text-slate-400 shrink-0">{fmtBytes(f.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(i)}
+                    className="p-1 rounded text-slate-400 hover:text-danger-500 hover:bg-danger-50 dark:hover:bg-danger-500/10 shrink-0"
+                    title="この資料を外す"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {extractInfo && (
+            <p className="mt-3 text-xs text-success-600 dark:text-success-400">
+              読み取りに使用: {extractInfo.used.join(' / ') || '—'}（内容を確認・修正してから登録してください）
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="space-y-4">
         <Field label="工事名 *">
           <input className={inputCls} value={form.project_name} onChange={(e) => set('project_name', e.target.value)} placeholder="例: ○○道路改良工事" />
