@@ -147,7 +147,7 @@ const EMPTY_FORM = {
   project_name: '', client_name: '', location: '', work_type: '', bid_method: '',
   status: 'collecting',
   notice_date: '', question_due: '', bid_start_date: '', bid_date: '', opening_date: '',
-  budget_price: '', our_estimate: '', awarded_price: '', awarded_company: '',
+  budget_price: '', our_estimate: '', bid_amount: '', awarded_price: '', awarded_company: '',
   note: '', remarks: '', reason: '',
 }
 
@@ -163,6 +163,7 @@ function BidFormModal({ item, onClose, onSaved, showToast }) {
       notice_date: item.notice_date || '', question_due: item.question_due || '',
       bid_start_date: item.bid_start_date || '', bid_date: item.bid_date || '', opening_date: item.opening_date || '',
       budget_price: pick(item.budget_price), our_estimate: pick(item.our_estimate),
+      bid_amount: pick(item.bid_amount),
       awarded_price: pick(item.awarded_price), awarded_company: pick(item.awarded_company),
       note: pick(item.note),
       remarks: pick(item.remarks), reason: pick(item.reason),
@@ -358,14 +359,20 @@ function BidFormModal({ item, onClose, onSaved, showToast }) {
         </div>
 
         <div className="border-t border-slate-100 dark:border-ink-700 pt-4">
-          <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-3">金額（円）</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mb-3">金額（円・税抜）</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             <Field label="予定価格">
               <input type="number" className={inputCls} value={form.budget_price} onChange={(e) => set('budget_price', e.target.value)} />
             </Field>
-            <Field label="自社見積">
-              <input type="number" className={inputCls} value={form.our_estimate} onChange={(e) => set('our_estimate', e.target.value)} />
+            <Field label="積算金額">
+              <input type="number" className={inputCls} value={form.our_estimate} onChange={(e) => set('our_estimate', e.target.value)} placeholder="積算データから自動入力" />
             </Field>
+            <Field label="入札金額">
+              <input type="number" className={inputCls} value={form.bid_amount} onChange={(e) => set('bid_amount', e.target.value)} placeholder="係数適用後の応札額" />
+            </Field>
+          </div>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">いずれも税抜。積算金額は詳細画面の「積算データ取込」で自動入力できます。入札金額は積算金額に係数等を適用した最終応札額を入力。</p>
+          <div className="grid grid-cols-2 gap-4 mt-3">
             <Field label="落札額">
               <input type="number" className={inputCls} value={form.awarded_price} onChange={(e) => set('awarded_price', e.target.value)} />
             </Field>
@@ -419,6 +426,7 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
   const [tab, setTab] = useState('basic')
   const [uploading, setUploading] = useState(false)
   const [docType, setDocType] = useState('設計書')
+  const [importing, setImporting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -471,6 +479,30 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
       showToast('error', err.response?.data?.error || 'アップロードに失敗しました')
     } finally {
       setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  // 積算データ(Excel)を取込 → 積算金額を自動入力＋資料添付
+  const importEstimate = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImporting(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await axios.post(`${apiUrl}/api/bids/${id}/import-estimate`, fd, authConfig())
+      if (res.data.estimated_amount != null) {
+        showToast('success', `積算金額に ¥${Number(res.data.estimated_amount).toLocaleString()} を入力しました（「${res.data.label_used}」から検出・税抜）`)
+      } else {
+        showToast('error', '金額を自動検出できませんでした。資料は添付したので、編集から手入力してください')
+      }
+      load()
+      onChanged()
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '積算データの取込に失敗しました')
+    } finally {
+      setImporting(false)
       e.target.value = ''
     }
   }
@@ -591,8 +623,25 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
 
       {tab === 'money' && (
         <div>
-          <Row label="予定価格" value={bid.budget_price != null ? `¥${Number(bid.budget_price).toLocaleString()}` : '—'} />
-          <Row label="自社見積" value={bid.our_estimate != null ? `¥${Number(bid.our_estimate).toLocaleString()}` : '—'} />
+          {/* 積算データ(Excel)取込 */}
+          <div className="mb-4 rounded-2xl border border-brand-200 dark:border-brand-500/30 bg-brand-50/60 dark:bg-brand-500/10 p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Sparkles className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+              <p className="text-sm font-bold text-brand-700 dark:text-brand-300">積算データ(Excel)から金額を取込</p>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+              ATLUS等の積算ソフトが出力した Excel をアップロードすると、「工事価格」「合計」等を自動検出して<b>積算金額（税抜）</b>に入力し、ファイルを資料として添付します。入札金額（係数適用後・税抜）は別途入力してください。
+            </p>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 cursor-pointer disabled:opacity-60">
+              {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {importing ? '取込中...' : '積算Excelを取込'}
+              <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={importEstimate} disabled={importing} />
+            </label>
+          </div>
+
+          <Row label="予定価格（税抜）" value={bid.budget_price != null ? `¥${Number(bid.budget_price).toLocaleString()}` : '—'} />
+          <Row label="積算金額（税抜）" value={bid.our_estimate != null ? `¥${Number(bid.our_estimate).toLocaleString()}` : '—'} />
+          <Row label="入札金額（税抜）" value={bid.bid_amount != null ? `¥${Number(bid.bid_amount).toLocaleString()}` : '—'} />
           <Row label="落札額" value={bid.awarded_price != null ? `¥${Number(bid.awarded_price).toLocaleString()} ${winRatio}` : '—'} />
           <Row label="落札業者" value={bid.awarded_company} />
         </div>
@@ -886,7 +935,7 @@ export default function BidsPage({ onBack }) {
                         <th className="px-4 py-3 font-semibold">発注者</th>
                         <th className="px-4 py-3 font-semibold whitespace-nowrap">入札締切</th>
                         <th className="px-4 py-3 font-semibold">状態</th>
-                        <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">自社見積</th>
+                        <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">積算金額</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 dark:divide-ink-700/60">
