@@ -529,9 +529,8 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
-  // アプリを設定順で並び替え（バグ報告は右下の常駐ボタンに一本化するためカードからは除外）
-  const sortedApps = (loading ? apps : sortAppsWithSettings(apps, serverSettings))
-    .filter((a) => a.view !== 'feedback')
+  // アプリを設定順で並び替え（「バグ報告・改善 一覧」カードは /api/apps 側で管理者のみに絞られる）
+  const sortedApps = loading ? apps : sortAppsWithSettings(apps, serverSettings)
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -791,6 +790,8 @@ function AppContent() {
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
   // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback'
   const [view, setView] = useState('dashboard')
+  // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
+  const [feedbackSubmitFirst, setFeedbackSubmitFirst] = useState(false)
 
   // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
   useEffect(() => {
@@ -925,7 +926,7 @@ function AppContent() {
   } else if (view === 'bids') {
     page = <BidsPage onBack={() => setView('dashboard')} />
   } else if (view === 'feedback') {
-    page = <FeedbackPage onBack={() => setView('dashboard')} startInSubmit />
+    page = <FeedbackPage onBack={() => setView('dashboard')} startInSubmit={feedbackSubmitFirst} />
   } else {
     page = (
       <DashboardPage
@@ -937,7 +938,11 @@ function AppContent() {
         bidStats={bidStats}
         serverSettings={serverSettings}
         onOpenSettings={() => setView('settings')}
-        onOpenInternal={(v) => setView(v || 'employees')}
+        onOpenInternal={(v) => {
+          // 管理カードからの遷移は一覧モード（FABからの投稿フォーム直開きと区別する）
+          if (v === 'feedback') setFeedbackSubmitFirst(false)
+          setView(v || 'employees')
+        }}
         announcementUnreadCount={announcementUnreadCount}
       />
     )
@@ -948,7 +953,7 @@ function AppContent() {
       {page}
       {/* バグ報告・改善要望は右下に常駐（報告ページを開いている時は重複表示しない） */}
       {view !== 'feedback' && (
-        <FeedbackFab onClick={() => setView('feedback')} />
+        <FeedbackFab onClick={() => { setFeedbackSubmitFirst(true); setView('feedback') }} />
       )}
     </>
   )
