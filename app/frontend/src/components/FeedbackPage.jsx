@@ -163,8 +163,8 @@ function SubmitModal({ onClose, onSubmitted, showToast }) {
         ...captureEnv(),
       }, authConfig())
       showToast('success', '報告を送信しました。ありがとうございます！')
+      // 閉じる処理は onSubmitted 側に委ねる（キャンセル時の onClose と挙動を分けるため）
       onSubmitted()
-      onClose()
     } catch (err) {
       showToast('error', err.response?.data?.error || '送信に失敗しました')
     } finally {
@@ -560,7 +560,13 @@ export default function FeedbackPage({ onBack, startInSubmit = false }) {
       </main>
 
       {showSubmit && (
-        <SubmitModal onClose={() => setShowSubmit(false)} onSubmitted={load} showToast={showToast} />
+        <SubmitModal
+          // キャンセル/閉じる: FAB(右下ボタン)から来た場合はポータルへ戻る。一覧から開いた場合は一覧へ。
+          onClose={() => { if (startInSubmit) onBack(); else setShowSubmit(false) }}
+          // 送信成功: 一覧を再読み込みしてフォームを閉じる（自分の報告一覧＋送信トーストを表示）
+          onSubmitted={() => { load(); setShowSubmit(false) }}
+          showToast={showToast}
+        />
       )}
       {detail && (
         <DetailModal item={detail} isAdmin={isAdmin} onClose={() => setDetail(null)} onChanged={load} showToast={showToast} />
