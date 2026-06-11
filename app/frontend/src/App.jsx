@@ -28,6 +28,7 @@ import SettingsPage from './components/SettingsPage'
 import EmployeesPage from './components/EmployeesPage'
 import AnnouncementsPage from './components/AnnouncementsPage'
 import BidsPage from './components/BidsPage'
+import FeedbackPage from './components/FeedbackPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -767,7 +768,7 @@ function AppContent() {
   const [serverSettings, setServerSettings] = useState(DEFAULT_SERVER_SETTINGS)
   // 未読お知らせ数（通知ベル用）。APIが落ちても 0 にフォールバック
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
-  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids'
+  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback'
   const [view, setView] = useState('dashboard')
 
   // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
@@ -906,6 +907,10 @@ function AppContent() {
 
   if (view === 'bids') {
     return <BidsPage onBack={() => setView('dashboard')} />
+  }
+
+  if (view === 'feedback') {
+    return <FeedbackPage onBack={() => setView('dashboard')} />
   }
 
   return (
