@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Gavel,
   Trophy,
+  Bug,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -528,8 +529,9 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
-  // アプリを設定順で並び替え
-  const sortedApps = loading ? apps : sortAppsWithSettings(apps, serverSettings)
+  // アプリを設定順で並び替え（バグ報告は右下の常駐ボタンに一本化するためカードからは除外）
+  const sortedApps = (loading ? apps : sortAppsWithSettings(apps, serverSettings))
+    .filter((a) => a.view !== 'feedback')
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -757,6 +759,25 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
   )
 }
 
+/**
+ * 画面右下に常駐するバグ報告・改善要望ボタン（FAB）。
+ * どの画面からでもワンタップで報告ページを開けるようにする。
+ */
+function FeedbackFab({ onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="バグ報告・改善要望"
+      title="バグ報告・改善要望"
+      className="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-brand-600 hover:bg-brand-700 text-white pl-4 pr-5 py-3 shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200"
+    >
+      <Bug className="w-5 h-5 shrink-0" />
+      <span className="hidden sm:inline text-sm font-semibold">バグ報告・改善</span>
+    </button>
+  )
+}
+
 function AppContent() {
   const [user, setUser] = useState(null)
   const [apps, setApps] = useState([])
@@ -887,45 +908,49 @@ function AppContent() {
     return <LoginPage onLoginSuccess={setUser} />
   }
 
+  // 現在のビューに対応するページを決定（FABを全ビュー共通で重ねるため変数に保持）
+  let page
   if (view === 'settings') {
-    return (
+    page = (
       <SettingsPage
         onBack={() => setView('dashboard')}
         apps={apps}
         onSettingsChange={handleSettingsChange}
       />
     )
-  }
-
-  if (view === 'employees') {
-    return <EmployeesPage onBack={() => setView('dashboard')} />
-  }
-
-  if (view === 'announcements') {
-    return <AnnouncementsPage onBack={() => setView('dashboard')} />
-  }
-
-  if (view === 'bids') {
-    return <BidsPage onBack={() => setView('dashboard')} />
-  }
-
-  if (view === 'feedback') {
-    return <FeedbackPage onBack={() => setView('dashboard')} />
+  } else if (view === 'employees') {
+    page = <EmployeesPage onBack={() => setView('dashboard')} />
+  } else if (view === 'announcements') {
+    page = <AnnouncementsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'bids') {
+    page = <BidsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'feedback') {
+    page = <FeedbackPage onBack={() => setView('dashboard')} />
+  } else {
+    page = (
+      <DashboardPage
+        user={user}
+        onLogout={handleLogout}
+        apps={apps}
+        loading={loading}
+        stats={stats}
+        bidStats={bidStats}
+        serverSettings={serverSettings}
+        onOpenSettings={() => setView('settings')}
+        onOpenInternal={(v) => setView(v || 'employees')}
+        announcementUnreadCount={announcementUnreadCount}
+      />
+    )
   }
 
   return (
-    <DashboardPage
-      user={user}
-      onLogout={handleLogout}
-      apps={apps}
-      loading={loading}
-      stats={stats}
-      bidStats={bidStats}
-      serverSettings={serverSettings}
-      onOpenSettings={() => setView('settings')}
-      onOpenInternal={(v) => setView(v || 'employees')}
-      announcementUnreadCount={announcementUnreadCount}
-    />
+    <>
+      {page}
+      {/* バグ報告・改善要望は右下に常駐（報告ページを開いている時は重複表示しない） */}
+      {view !== 'feedback' && (
+        <FeedbackFab onClick={() => setView('feedback')} />
+      )}
+    </>
   )
 }
 
