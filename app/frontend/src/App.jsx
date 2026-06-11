@@ -925,7 +925,7 @@ function AppContent() {
   } else if (view === 'bids') {
     page = <BidsPage onBack={() => setView('dashboard')} />
   } else if (view === 'feedback') {
-    page = <FeedbackPage onBack={() => setView('dashboard')} />
+    page = <FeedbackPage onBack={() => setView('dashboard')} startInSubmit />
   } else {
     page = (
       <DashboardPage

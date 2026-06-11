@@ -418,11 +418,12 @@ function DetailModal({ item, isAdmin, onClose, onChanged, showToast }) {
   )
 }
 
-export default function FeedbackPage({ onBack }) {
+export default function FeedbackPage({ onBack, startInSubmit = false }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showSubmit, setShowSubmit] = useState(false)
+  // 右下のFABから開いた場合は、いきなり投稿フォームを表示する
+  const [showSubmit, setShowSubmit] = useState(startInSubmit)
   const [detail, setDetail] = useState(null)
   const [toast, setToast] = useState(null)
   const [filter, setFilter] = useState({ status: '', type: '' })
