@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, Pin, Megaphone, Eye, CheckCircle2,
   AlertTriangle, Pencil, Trash2, X, Save, Search,
-  ChevronDown, Users, Loader2,
+  ChevronDown, Users, Loader2, Paperclip, Download, Upload, FileText,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -25,6 +25,14 @@ function fmtDate(d) {
   if (!d) return ''
   const dt = new Date(d)
   return `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`
+}
+
+// ファイルサイズを読みやすく整形（B/KB/MB）
+function fmtSize(bytes) {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 // 本文から抜粋（改行・タグを除去して最大80文字）
@@ -136,6 +144,18 @@ function AnnouncementDetailModal({ item, canAdmin, onClose, onRead, onAck, onEdi
     }
   }
 
+  // 添付ファイルを署名付きURLで開く（120秒有効）
+  const downloadAttachment = async (path) => {
+    try {
+      const res = await axios.get(`${apiUrl}/api/announcements/${item.id}/attachment-url`, {
+        ...authConfig(), params: { path },
+      })
+      window.open(res.data.url, '_blank', 'noopener')
+    } catch {
+      showToast('error', 'ファイルのダウンロードに失敗しました')
+    }
+  }
+
   return (
     <ModalShell title={item.title} onClose={onClose} wide>
       {/* メタ情報 */}
@@ -167,6 +187,31 @@ function AnnouncementDetailModal({ item, canAdmin, onClose, onRead, onAck, onEdi
       <div className="text-sm text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed border-t border-slate-100 dark:border-ink-700 pt-4 mb-5">
         {item.body || '（本文なし）'}
       </div>
+
+      {/* 添付ファイル */}
+      {item.attachments?.length > 0 && (
+        <div className="mb-5">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">
+            <Paperclip className="w-3.5 h-3.5" />添付ファイル（{item.attachments.length}）
+          </div>
+          <ul className="space-y-1">
+            {item.attachments.map((a, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => downloadAttachment(a.path)}
+                  className="w-full flex items-center gap-2 text-sm bg-slate-50 dark:bg-ink-900/40 hover:bg-slate-100 dark:hover:bg-ink-700 rounded-lg px-3 py-2 text-left transition"
+                >
+                  <FileText className="w-4 h-4 text-brand-500 shrink-0" />
+                  <span className="flex-1 truncate text-slate-700 dark:text-slate-200">{a.name}</span>
+                  {a.size != null && <span className="text-xs text-slate-400">{fmtSize(a.size)}</span>}
+                  <Download className="w-4 h-4 text-slate-400 shrink-0" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* 「確認しました」ボタン */}
       {item.requires_ack && !item.is_acknowledged && (
@@ -269,6 +314,7 @@ const EMPTY_FORM = {
   requires_ack: false,
   publish_at: '',
   expire_at: '',
+  attachments: [],
 }
 
 function AnnouncementFormModal({ item, onClose, onSaved, showToast }) {
@@ -286,12 +332,41 @@ function AnnouncementFormModal({ item, onClose, onSaved, showToast }) {
       requires_ack: item.requires_ack || false,
       publish_at: item.publish_at ? item.publish_at.slice(0, 16) : '',
       expire_at: item.expire_at ? item.expire_at.slice(0, 16) : '',
+      attachments: item.attachments || [],
     }
   })
   const [targetValue, setTargetValue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [uploading, setUploading] = useState(false)
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  // 複数ファイルをアップロードし、返却メタ {name, path, size} を attachments に積む
+  const handleUpload = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    setUploading(true)
+    try {
+      const uploaded = []
+      for (const file of files) {
+        const fd = new FormData()
+        fd.append('file', file)
+        const res = await axios.post(`${apiUrl}/api/announcements/upload-file`, fd, {
+          headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
+        })
+        uploaded.push(res.data)
+      }
+      setForm((f) => ({ ...f, attachments: [...(f.attachments || []), ...uploaded] }))
+    } catch (err) {
+      showToast('error', err.response?.data?.error || 'ファイルのアップロードに失敗しました')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const removeAttachment = (idx) =>
+    setForm((f) => ({ ...f, attachments: f.attachments.filter((_, i) => i !== idx) }))
 
   const addTarget = () => {
     const v = targetValue.trim()
@@ -352,6 +427,31 @@ function AnnouncementFormModal({ item, onClose, onSaved, showToast }) {
             onChange={(e) => set('body', e.target.value)}
             placeholder="本文を入力"
           />
+        </Field>
+
+        {/* 添付ファイル（複数可） */}
+        <Field label="添付ファイル">
+          <div className="space-y-2">
+            {form.attachments?.length > 0 && (
+              <ul className="space-y-1">
+                {form.attachments.map((a, i) => (
+                  <li key={i} className="flex items-center gap-2 text-sm bg-slate-50 dark:bg-ink-900/40 rounded-lg px-3 py-2">
+                    <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span className="flex-1 truncate text-slate-700 dark:text-slate-200">{a.name}</span>
+                    {a.size != null && <span className="text-xs text-slate-400">{fmtSize(a.size)}</span>}
+                    <button type="button" onClick={() => removeAttachment(i)} className="text-slate-400 hover:text-danger-500">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <label className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-ink-600 text-sm text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-50 dark:hover:bg-ink-700">
+              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {uploading ? 'アップロード中...' : 'ファイルを選択（複数可）'}
+              <input type="file" multiple className="hidden" onChange={handleUpload} disabled={uploading} />
+            </label>
+          </div>
         </Field>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
