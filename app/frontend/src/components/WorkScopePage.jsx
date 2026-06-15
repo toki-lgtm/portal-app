@@ -101,14 +101,23 @@ export default function WorkScopePage({ onBack }) {
     setDownloading(true)
     setError('')
     try {
-      const res = await axios.get(`${apiUrl}/api/downloads/workscope/file`, authConfig())
-      if (res.data?.url) {
-        window.location.href = res.data.url
-        // 自分の前回DL日時を更新
-        setTimeout(fetchInfo, 1500)
-      }
+      // 本人の氏名/メールを埋め込んだ zip がバイナリで返る
+      const res = await axios.get(`${apiUrl}/api/downloads/workscope/file`, {
+        ...authConfig(),
+        responseType: 'blob',
+      })
+      const blobUrl = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = 'WorkScope_setup.zip'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(blobUrl)
+      // 自分の前回DL日時を更新
+      setTimeout(fetchInfo, 1500)
     } catch (e) {
-      setError(e.response?.data?.error || 'ダウンロードに失敗しました')
+      setError('ダウンロードに失敗しました')
     } finally {
       setDownloading(false)
     }
