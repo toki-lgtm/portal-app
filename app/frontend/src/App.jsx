@@ -901,6 +901,24 @@ function AppContent() {
   // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
   const [feedbackSubmitFirst, setFeedbackSubmitFirst] = useState(false)
 
+  // ブラウザの戻る/進むボタンに対応：view を History API と連動させる。
+  // popstate 由来の view 変更では履歴を積み直さない（ループ防止）。
+  const popRef = useRef(false)
+  useEffect(() => {
+    window.history.replaceState({ view: 'dashboard' }, '')
+    const onPop = (e) => {
+      popRef.current = true
+      setView(e.state?.view || 'dashboard')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => {
+    if (popRef.current) { popRef.current = false; return }
+    if (window.history.state?.view === view) return
+    window.history.pushState({ view }, '')
+  }, [view])
+
   // 起動時にテーマをシステム連動で適用（ThemeToggleが上書きするまで）
   useEffect(() => {
     applyTheme(loadTheme())
