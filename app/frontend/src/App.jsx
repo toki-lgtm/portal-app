@@ -20,6 +20,7 @@ import {
   Gavel,
   Trophy,
   Bug,
+  FolderOpen,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -30,6 +31,7 @@ import EmployeesPage from './components/EmployeesPage'
 import AnnouncementsPage from './components/AnnouncementsPage'
 import BidsPage from './components/BidsPage'
 import FeedbackPage from './components/FeedbackPage'
+import DocumentsPage from './components/DocumentsPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -265,7 +267,7 @@ function RecentActivity({ recent }) {
  * 通知ベルドロップダウン。
  * stats の awaiting_approval / issues_open と未読お知らせ数を統合表示。
  */
-function NotificationBell({ stats, apps, announcementUnreadCount, onOpenAnnouncements }) {
+function NotificationBell({ stats, apps, announcementUnreadCount, documentsUnreadCount, onOpenAnnouncements, onOpenDocuments }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
@@ -279,7 +281,7 @@ function NotificationBell({ stats, apps, announcementUnreadCount, onOpenAnnounce
   }, [])
 
   const patrolCount = (stats?.awaiting_approval || 0) + (stats?.issues_open || 0)
-  const badgeCount = patrolCount + (announcementUnreadCount || 0)
+  const badgeCount = patrolCount + (announcementUnreadCount || 0) + (documentsUnreadCount || 0)
 
   // 安全パトロールアプリの URL を apps から探す（名前で判定）
   const patrolApp = apps?.find(
@@ -319,6 +321,20 @@ function NotificationBell({ stats, apps, announcementUnreadCount, onOpenAnnounce
                   </button>
                   <span className="font-bold text-brand-600 dark:text-brand-400">
                     {announcementUnreadCount} 件
+                  </span>
+                </li>
+              )}
+              {(documentsUnreadCount || 0) > 0 && (
+                <li className="flex items-center justify-between text-sm">
+                  <button
+                    className="flex items-center gap-2 flex-1 text-left"
+                    onClick={() => { setOpen(false); onOpenDocuments?.() }}
+                  >
+                    <FolderOpen className="w-4 h-4 text-brand-500 shrink-0" />
+                    <span className="text-slate-700 dark:text-slate-300 hover:underline">未読の回覧書類</span>
+                  </button>
+                  <span className="font-bold text-brand-600 dark:text-brand-400">
+                    {documentsUnreadCount} 件
                   </span>
                 </li>
               )}
@@ -456,6 +472,89 @@ function AnnouncementsCard({ onOpenAnnouncements }) {
 }
 
 /**
+ * ダッシュボードの文書回覧カード（未読件数・要対応件数）。
+ * APIが失敗しても表示が崩れないようtry/catchでフォールバック。
+ */
+function DocumentsCard({ onOpenDocuments }) {
+  const [counts, setCounts] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const token = localStorage.getItem('authToken')
+    const fetch_ = async () => {
+      try {
+        const res = await fetch(`${apiUrl}/api/circulars/inbox-count`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = await res.json()
+        setCounts(data)
+      } catch {
+        // APIが落ちても既存ダッシュボードは壊さない
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetch_()
+  }, [])
+
+  const unread = counts?.unread || 0
+  const actionPending = counts?.action_required_pending || 0
+  const total = unread + actionPending
+
+  return (
+    <Card className="p-6 h-full">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <FolderOpen className="w-5 h-5 text-brand-500" />
+          <h2 className="font-bold text-slate-900 dark:text-white">文書回覧</h2>
+          {total > 0 && (
+            <span className="w-5 h-5 rounded-full bg-accent-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">
+              {total > 9 ? '9+' : total}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={onOpenDocuments}
+          className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+        >
+          一覧を見る <ArrowRight className="w-3 h-3" />
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400 py-4 text-center">読み込み中...</p>
+      ) : (
+        <div className="space-y-3">
+          {unread > 0 && (
+            <button
+              onClick={onOpenDocuments}
+              className="w-full flex items-center justify-between p-3 rounded-xl bg-brand-50 dark:bg-brand-500/10 border border-brand-200 dark:border-brand-500/30 hover:bg-brand-100 dark:hover:bg-brand-500/20 transition"
+            >
+              <span className="text-sm font-semibold text-brand-700 dark:text-brand-300">未読の回覧</span>
+              <span className="text-sm font-bold text-brand-600 dark:text-brand-400">{unread} 件</span>
+            </button>
+          )}
+          {actionPending > 0 && (
+            <button
+              onClick={onOpenDocuments}
+              className="w-full flex items-center justify-between p-3 rounded-xl bg-danger-50 dark:bg-danger-500/10 border border-danger-200 dark:border-danger-500/30 hover:bg-danger-100 dark:hover:bg-danger-500/20 transition"
+            >
+              <span className="text-sm font-semibold text-danger-700 dark:text-danger-400">未対応の要対応</span>
+              <span className="text-sm font-bold text-danger-600 dark:text-danger-400">{actionPending} 件</span>
+            </button>
+          )}
+          {unread === 0 && actionPending === 0 && (
+            <p className="text-sm text-slate-400 py-4 text-center">未対応の回覧はありません</p>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * 入札案件のKPIセクション（入札担当のみ）。
  * bidStats が取得できた場合だけ表示。クリックで入札案件管理ビューへ。
  */
@@ -525,7 +624,7 @@ function BidsKpiSection({ bidStats, onOpen }) {
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
-function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount }) {
+function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount, documentsUnreadCount }) {
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
@@ -564,7 +663,9 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
                 stats={stats}
                 apps={apps}
                 announcementUnreadCount={announcementUnreadCount}
+                documentsUnreadCount={documentsUnreadCount}
                 onOpenAnnouncements={() => onOpenInternal?.('announcements')}
+                onOpenDocuments={() => onOpenInternal?.('documents')}
               />
             )}
 
@@ -719,11 +820,16 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
               </div>
             )}
 
-            {/* お知らせカード（常設）＋最近の点検 */}
+            {/* お知らせカード（常設）＋文書回覧カード＋最近の点検 */}
             <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
-              {/* お知らせ（常設・1列） */}
-              <div className={showKpi && stats ? '' : 'lg:col-span-3'}>
+              {/* お知らせ（常設） */}
+              <div>
                 <AnnouncementsCard onOpenAnnouncements={() => onOpenInternal?.('announcements')} />
+              </div>
+
+              {/* 文書回覧（常設） */}
+              <div>
+                <DocumentsCard onOpenDocuments={() => onOpenInternal?.('documents')} />
               </div>
 
               {/* 最近の点検（show_kpi && statsが取得できた場合のみ） */}
@@ -788,7 +894,9 @@ function AppContent() {
   const [serverSettings, setServerSettings] = useState(DEFAULT_SERVER_SETTINGS)
   // 未読お知らせ数（通知ベル用）。APIが落ちても 0 にフォールバック
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
-  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback'
+  // 未読文書回覧数（通知ベル用）
+  const [documentsUnreadCount, setDocumentsUnreadCount] = useState(0)
+  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents'
   const [view, setView] = useState('dashboard')
   // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
   const [feedbackSubmitFirst, setFeedbackSubmitFirst] = useState(false)
@@ -868,6 +976,16 @@ function AppContent() {
       }
     }
 
+    // 未読文書回覧数を取得。失敗しても既存表示に影響させない
+    const fetchDocumentsUnreadCount = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/circulars/inbox-count`, authConfig)
+        setDocumentsUnreadCount(response.data?.unread || 0)
+      } catch {
+        setDocumentsUnreadCount(0)
+      }
+    }
+
     // 入札KPI。アクセス権がない場合は403で失敗するので静かに非表示（null のまま）
     const fetchBidStats = async () => {
       try {
@@ -882,6 +1000,7 @@ function AppContent() {
     fetchStats()
     fetchUserSettings()
     fetchAnnouncementUnreadCount()
+    fetchDocumentsUnreadCount()
     fetchBidStats()
   }, [user])
 
@@ -894,6 +1013,7 @@ function AppContent() {
     setBidStats(null)
     setServerSettings(DEFAULT_SERVER_SETTINGS)
     setAnnouncementUnreadCount(0)
+    setDocumentsUnreadCount(0)
     setView('dashboard')
   }
 
@@ -925,6 +1045,23 @@ function AppContent() {
     page = <AnnouncementsPage onBack={() => setView('dashboard')} />
   } else if (view === 'bids') {
     page = <BidsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'documents') {
+    page = (
+      <DocumentsPage
+        onBack={() => setView('dashboard')}
+        onCountChange={() => {
+          // 文書回覧から戻ったときに未読数を再取得
+          const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+          const token = localStorage.getItem('authToken')
+          fetch(`${apiUrl}/api/circulars/inbox-count`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((r) => r.json())
+            .then((d) => setDocumentsUnreadCount(d?.unread || 0))
+            .catch(() => {})
+        }}
+      />
+    )
   } else if (view === 'feedback') {
     page = <FeedbackPage onBack={() => setView('dashboard')} startInSubmit={feedbackSubmitFirst} />
   } else {
@@ -944,6 +1081,7 @@ function AppContent() {
           setView(v || 'employees')
         }}
         announcementUnreadCount={announcementUnreadCount}
+        documentsUnreadCount={documentsUnreadCount}
       />
     )
   }
