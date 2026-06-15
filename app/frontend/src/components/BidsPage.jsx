@@ -420,7 +420,7 @@ function Row({ label, value }) {
 // ──────────────────────────────────────────────
 // 詳細モーダル（基本情報 / 金額・結果 / 資料 / 履歴 のタブ）
 // ──────────────────────────────────────────────
-function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
+function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) {
   const [bid, setBid] = useState(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('basic')
@@ -553,6 +553,7 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
       {/* ステータス変更 */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <StatusBadge status={bid.status} />
+        {isAdmin && (
         <select
           className="px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
           value={bid.status}
@@ -560,10 +561,13 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
         >
           {STATUS_DEFS.map((s) => <option key={s.key} value={s.key}>{s.label}に変更</option>)}
         </select>
+        )}
+        {isAdmin && (
         <div className="ml-auto flex gap-2">
           <Button variant="danger" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" />削除</Button>
           <Button variant="secondary" size="sm" onClick={() => { onClose(); onEdit(bid) }}><Pencil className="w-4 h-4" />編集</Button>
         </div>
+        )}
       </div>
 
       {/* タブ */}
@@ -677,9 +681,11 @@ function BidDetailModal({ id, onClose, onEdit, onChanged, showToast }) {
                   <button onClick={() => downloadDoc(d.id)} className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-700" title="ダウンロード">
                     <Download className="w-4 h-4" />
                   </button>
+                  {isAdmin && (
                   <button onClick={() => deleteDoc(d.id)} className="p-1.5 rounded-lg text-danger-500 hover:bg-danger-50 dark:hover:bg-danger-500/10" title="削除">
                     <Trash2 className="w-4 h-4" />
                   </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -821,6 +827,7 @@ export default function BidsPage({ onBack }) {
   const [detailId, setDetailId] = useState(null)
   const [editing, setEditing] = useState(null) // {} = 新規 / item = 編集
   const [toast, setToast] = useState(null)
+  const [isAdmin, setIsAdmin] = useState(false)
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -846,6 +853,13 @@ export default function BidsPage({ onBack }) {
     setLoading(true)
     loadBids()
   }, [loadBids])
+
+  // 入札の管理者（編集・削除）権限を判定。member は閲覧＋追加のみ。
+  useEffect(() => {
+    axios.get(`${apiUrl}/api/my-permissions`, authConfig())
+      .then((res) => setIsAdmin(res.data?.role === 'admin' || res.data?.apps?.bids === 'admin'))
+      .catch(() => setIsAdmin(false))
+  }, [])
 
   const today = todayStr()
   const in7 = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
@@ -973,6 +987,7 @@ export default function BidsPage({ onBack }) {
       {detailId && (
         <BidDetailModal
           id={detailId}
+          isAdmin={isAdmin}
           onClose={() => setDetailId(null)}
           onEdit={(item) => setEditing(item)}
           onChanged={loadBids}
