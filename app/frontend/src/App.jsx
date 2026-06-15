@@ -896,6 +896,8 @@ function AppContent() {
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
   // 未読文書回覧数（通知ベル用）
   const [documentsUnreadCount, setDocumentsUnreadCount] = useState(0)
+  // バグ報告・改善の利用権限（FAB表示判定。member 以上で報告可）
+  const [canReportFeedback, setCanReportFeedback] = useState(false)
   // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents'
   const [view, setView] = useState('dashboard')
   // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
@@ -1014,12 +1016,23 @@ function AppContent() {
       }
     }
 
+    // バグ報告・改善の利用権限を取得（FAB表示判定）
+    const fetchMyPerms = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/my-permissions`, authConfig)
+        setCanReportFeedback(response.data?.role === 'admin' || !!response.data?.apps?.feedback)
+      } catch {
+        setCanReportFeedback(false)
+      }
+    }
+
     fetchApps()
     fetchStats()
     fetchUserSettings()
     fetchAnnouncementUnreadCount()
     fetchDocumentsUnreadCount()
     fetchBidStats()
+    fetchMyPerms()
   }, [user])
 
   const handleLogout = () => {
@@ -1108,7 +1121,7 @@ function AppContent() {
     <>
       {page}
       {/* バグ報告・改善要望は右下に常駐（報告ページを開いている時は重複表示しない） */}
-      {view !== 'feedback' && (
+      {view !== 'feedback' && canReportFeedback && (
         <FeedbackFab onClick={() => { setFeedbackSubmitFirst(true); setView('feedback') }} />
       )}
     </>

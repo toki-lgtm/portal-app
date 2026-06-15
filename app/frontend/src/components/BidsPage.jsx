@@ -443,7 +443,7 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
 
   const changeStatus = async (status) => {
     try {
-      await axios.put(`${apiUrl}/api/bids/${id}`, { status }, authConfig())
+      await axios.patch(`${apiUrl}/api/bids/${id}/status`, { status }, authConfig())
       showToast('success', 'ステータスを更新しました')
       load()
       onChanged()
@@ -553,7 +553,6 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
       {/* ステータス変更 */}
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <StatusBadge status={bid.status} />
-        {isAdmin && (
         <select
           className="px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-xs text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
           value={bid.status}
@@ -561,7 +560,6 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
         >
           {STATUS_DEFS.map((s) => <option key={s.key} value={s.key}>{s.label}に変更</option>)}
         </select>
-        )}
         {isAdmin && (
         <div className="ml-auto flex gap-2">
           <Button variant="danger" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" />削除</Button>
