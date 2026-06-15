@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
-import { Monitor, Download, Loader2, ShieldCheck, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { Monitor, Download, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react'
 import Button from './ui/Button'
+import { EULA_TEXT, EULA_VERSION } from '../lib/workscopeEula'
 
 const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
@@ -10,20 +11,15 @@ function authConfig() {
   return { headers: { Authorization: `Bearer ${token}` } }
 }
 
-// WorkScope が記録する内容（透明性のため明示）
-const RECORDED_ITEMS = [
-  'アプリの使用時間とウィンドウタイトル',
-  'キーボード入力から生成した作業サマリー（個人情報は自動マスク）',
-  'Outlook メールの件名・宛先・要約',
-]
-
 /**
  * 初回アクセス時の WorkScope 導入ゲート。
  * 未ダウンロードの一般社員に対し、画面全体をふさぐ必須モーダルを表示する。
+ * 利用規約に同意（チェック）しないとダウンロードできず、同意は中央に記録される。
  * ダウンロードすると required が解除されてモーダルは消える（管理者には出ない）。
  */
 export default function WorkScopeGate() {
   const [status, setStatus] = useState(null) // { required, available, downloaded }
+  const [agreed, setAgreed] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [justDownloaded, setJustDownloaded] = useState(false)
   const [error, setError] = useState('')
@@ -33,8 +29,7 @@ export default function WorkScopeGate() {
       const res = await axios.get(`${apiUrl}/api/downloads/workscope/my-status`, authConfig())
       setStatus(res.data)
     } catch {
-      // 取得失敗時はブロックしない（業務を止めない）
-      setStatus({ required: false })
+      setStatus({ required: false }) // 取得失敗時はブロックしない（業務を止めない）
     }
   }, [])
 
@@ -46,6 +41,11 @@ export default function WorkScopeGate() {
     setDownloading(true)
     setError('')
     try {
+      // 同意を中央記録（失敗してもダウンロードは妨げない）
+      try {
+        await axios.post(`${apiUrl}/api/downloads/workscope/consent`, { eula_version: EULA_VERSION }, authConfig())
+      } catch (_) { /* 記録失敗は致命としない */ }
+
       const res = await axios.get(`${apiUrl}/api/downloads/workscope/file`, {
         ...authConfig(),
         responseType: 'blob',
@@ -70,10 +70,10 @@ export default function WorkScopeGate() {
   if (!status || !status.required) return null
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center px-4">
-      <div className="max-w-lg w-full bg-white dark:bg-ink-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center px-4 py-6">
+      <div className="max-w-lg w-full bg-white dark:bg-ink-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-ink-700 overflow-hidden flex flex-col max-h-[92vh]">
         {/* ヘッダー */}
-        <div className="bg-brand-600 px-6 py-5 flex items-center gap-3">
+        <div className="bg-brand-600 px-6 py-5 flex items-center gap-3 shrink-0">
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
             <Monitor className="w-6 h-6 text-white" />
           </div>
@@ -83,26 +83,29 @@ export default function WorkScopeGate() {
           </div>
         </div>
 
-        <div className="p-6">
+        <div className="p-6 overflow-y-auto">
           <p className="text-sm text-slate-600 dark:text-slate-300">
             社内ポータルのご利用には、業務記録ツール「WorkScope」の導入が必要です。
-            下のボタンからインストーラーをダウンロードし、導入をお願いします。
+            下記の利用規約をお読みのうえ、同意してインストーラーをダウンロードしてください。
           </p>
 
-          <div className="mt-4 rounded-xl bg-slate-50 dark:bg-ink-900/40 border border-slate-200 dark:border-ink-700 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <ShieldCheck className="w-4 h-4 text-brand-500" />
-              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">記録される主な内容</span>
-            </div>
-            <ul className="space-y-1.5">
-              {RECORDED_ITEMS.map((t) => (
-                <li key={t} className="flex items-start gap-2 text-sm text-slate-600 dark:text-slate-300">
-                  <CheckCircle2 className="w-4 h-4 text-success-500 mt-0.5 shrink-0" />
-                  {t}
-                </li>
-              ))}
-            </ul>
+          {/* 利用規約（全文・スクロール） */}
+          <div className="mt-4 h-56 overflow-y-auto rounded-xl bg-slate-50 dark:bg-ink-900/40 border border-slate-200 dark:border-ink-700 p-4">
+            <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-slate-600 dark:text-slate-300">{EULA_TEXT}</pre>
           </div>
+
+          {/* 同意チェック */}
+          <label className="flex items-start gap-2 mt-4 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={agreed}
+              onChange={(e) => setAgreed(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-brand-600"
+            />
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+              上記の利用規約・プライバシーポリシーを読み、同意します。
+            </span>
+          </label>
 
           {error && (
             <div className="mt-4 flex items-center gap-2 p-3 rounded-xl bg-danger-50 dark:bg-danger-500/10 border border-danger-200 dark:border-danger-500/30 text-sm text-danger-700 dark:text-danger-400">
@@ -118,7 +121,7 @@ export default function WorkScopeGate() {
                 <ol className="list-decimal list-inside space-y-1 text-success-700 dark:text-success-400">
                   <li>zip を右クリック →「すべて展開」</li>
                   <li>「installer」内の <b>WorkScope_インストール.bat</b> を右クリック →「管理者として実行」</li>
-                  <li>画面の規約に同意（氏名・メールは自動入力されます）</li>
+                  <li>画面に従って導入（氏名・メールは自動入力されます）</li>
                 </ol>
               </div>
               <p className="text-xs text-slate-400 dark:text-slate-500 mt-3 text-center">
@@ -128,11 +131,11 @@ export default function WorkScopeGate() {
           ) : (
             <Button
               onClick={handleDownload}
-              disabled={downloading || !status.available}
+              disabled={downloading || !agreed || !status.available}
               className="mt-5 w-full justify-center"
             >
               {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-              インストーラーをダウンロード
+              同意してダウンロード
             </Button>
           )}
 

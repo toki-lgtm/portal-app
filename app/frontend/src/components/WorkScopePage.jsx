@@ -7,6 +7,7 @@ import {
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
+import { EULA_VERSION } from '../lib/workscopeEula'
 
 const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
@@ -101,6 +102,11 @@ export default function WorkScopePage({ onBack }) {
     setDownloading(true)
     setError('')
     try {
+      // 同意を中央記録（失敗してもダウンロードは妨げない）
+      try {
+        await axios.post(`${apiUrl}/api/downloads/workscope/consent`, { eula_version: EULA_VERSION }, authConfig())
+      } catch (_) { /* 記録失敗は致命としない */ }
+
       // 本人の氏名/メールを埋め込んだ zip がバイナリで返る
       const res = await axios.get(`${apiUrl}/api/downloads/workscope/file`, {
         ...authConfig(),
