@@ -100,7 +100,9 @@ export default function WorkScopePage({ onBack }) {
     // 管理者判定（失敗時は非管理者扱い）
     axios.get(`${apiUrl}/api/my-permissions`, authConfig())
       .then((r) => {
-        if (r.data?.role === 'admin') {
+        // グローバル管理者、または社員一覧で WorkScope を「管理者」に設定された人
+        const admin = r.data?.role === 'admin' || r.data?.apps?.workscope === 'admin'
+        if (admin) {
           setIsAdmin(true)
           fetchStats()
           fetchConsents()
@@ -193,7 +195,8 @@ export default function WorkScopePage({ onBack }) {
           </div>
         )}
 
-        {/* 概要・透明性 */}
+        {/* 概要・透明性（管理者のみ表示。利用者にはダウンロードと導入手順のみ） */}
+        {isAdmin && (
         <Card className="p-6">
           <div className="flex items-start gap-3 mb-4">
             <div className="w-12 h-12 rounded-xl bg-brand-50 dark:bg-brand-500/15 text-brand-600 dark:text-brand-400 flex items-center justify-center shrink-0">
@@ -223,6 +226,7 @@ export default function WorkScopePage({ onBack }) {
             </ul>
           </div>
         </Card>
+        )}
 
         {/* ダウンロード */}
         <Card className="p-6">

@@ -11,6 +11,13 @@ function authConfig() {
   return { headers: { Authorization: `Bearer ${token}` } }
 }
 
+// 導入手順（ダウンロード前から案内する）
+const INSTALL_STEPS = [
+  'ダウンロードした zip を右クリック →「すべて展開」で解凍',
+  '「installer」フォルダ内の WorkScope_インストール.bat を右クリック →「管理者として実行」',
+  '画面の指示に従って導入（氏名・メールは自動入力されます）',
+]
+
 /**
  * 初回アクセス時の WorkScope 導入ゲート。
  * 未ダウンロードの一般社員に対し、画面全体をふさぐ必須モーダルを表示する。
@@ -94,6 +101,22 @@ export default function WorkScopeGate() {
             <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-slate-600 dark:text-slate-300">{EULA_TEXT}</pre>
           </div>
 
+          {/* 導入手順 */}
+          <div className="mt-4">
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-2">導入手順</p>
+            <ol className="space-y-2">
+              {INSTALL_STEPS.map((s, i) => (
+                <li key={i} className="flex items-start gap-2.5 text-sm text-slate-600 dark:text-slate-300">
+                  <span className="w-5 h-5 rounded-full bg-brand-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">{i + 1}</span>
+                  {s}
+                </li>
+              ))}
+            </ol>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
+              ※ Python や ActivityWatch が未導入の場合は自動で導入されます（初回は数分）。
+            </p>
+          </div>
+
           {/* 同意チェック */}
           <label className="flex items-start gap-2 mt-4 cursor-pointer select-none">
             <input
@@ -117,12 +140,7 @@ export default function WorkScopeGate() {
           {justDownloaded ? (
             <div className="mt-5">
               <div className="rounded-xl bg-success-50 dark:bg-success-500/10 border border-success-200 dark:border-success-500/30 p-4 text-sm text-success-800 dark:text-success-300">
-                <p className="font-semibold mb-1">ダウンロードしました。次の手順で導入してください：</p>
-                <ol className="list-decimal list-inside space-y-1 text-success-700 dark:text-success-400">
-                  <li>zip を右クリック →「すべて展開」</li>
-                  <li>「installer」内の <b>WorkScope_インストール.bat</b> を右クリック →「管理者として実行」</li>
-                  <li>画面に従って導入（氏名・メールは自動入力されます）</li>
-                </ol>
+                <p className="font-semibold">ダウンロードしました。上の「導入手順」に沿って導入してください。</p>
               </div>
               <p className="text-xs text-slate-400 dark:text-slate-500 mt-3 text-center">
                 ダウンロードが確認できると、この画面は自動的に閉じます。

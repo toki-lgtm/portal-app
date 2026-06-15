@@ -21,6 +21,7 @@ const APP_LABELS = {
   'bids': '入札案件管理',
   'documents': '文書回覧',
   'feedback': 'バグ報告・改善 一覧',
+  'workscope': 'WorkScope導入',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
