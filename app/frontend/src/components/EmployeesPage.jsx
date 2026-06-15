@@ -17,11 +17,9 @@ const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 const APP_LABELS = {
   'safety-patrol': '安全パトロール',
   'employee-list': '社員一覧',
+  'announcements': 'お知らせ',
   'bids': '入札案件管理',
-  'mailer': 'メーラー',
-  'file-manager': 'ファイル管理',
-  'evaluation': '社員評価',
-  'dormitory': '宿舎予約',
+  'documents': '文書回覧',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
