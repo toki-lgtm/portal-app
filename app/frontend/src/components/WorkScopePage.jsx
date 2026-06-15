@@ -57,6 +57,7 @@ export default function WorkScopePage({ onBack }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [stats, setStats] = useState(null)
   const [statsLoading, setStatsLoading] = useState(false)
+  const [consents, setConsents] = useState(null)
   const [file, setFile] = useState(null)
   const [version, setVersion] = useState('')
   const [notes, setNotes] = useState('')
@@ -85,6 +86,15 @@ export default function WorkScopePage({ onBack }) {
     }
   }, [])
 
+  const fetchConsents = useCallback(async () => {
+    try {
+      const res = await axios.get(`${apiUrl}/api/admin/workscope/consents`, authConfig())
+      setConsents(res.data)
+    } catch {
+      setConsents(null)
+    }
+  }, [])
+
   useEffect(() => {
     fetchInfo()
     // 管理者判定（失敗時は非管理者扱い）
@@ -93,10 +103,11 @@ export default function WorkScopePage({ onBack }) {
         if (r.data?.role === 'admin') {
           setIsAdmin(true)
           fetchStats()
+          fetchConsents()
         }
       })
       .catch(() => {})
-  }, [fetchInfo, fetchStats])
+  }, [fetchInfo, fetchStats, fetchConsents])
 
   const handleDownload = async () => {
     setDownloading(true)
@@ -381,6 +392,52 @@ export default function WorkScopePage({ onBack }) {
                 )}
               </>
             )}
+
+            {/* 利用規約の同意状況 */}
+            <div className="mt-6 pt-5 border-t border-slate-200 dark:border-ink-700">
+              <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200 mb-3">利用規約の同意状況</h3>
+              {!consents ? (
+                <p className="text-sm text-slate-400">—</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="rounded-xl bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 p-3 text-center">
+                      <p className="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{consents.total}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">同意済み（人）</p>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 p-3 text-center">
+                      <p className="text-2xl font-extrabold text-warning-600 dark:text-warning-400 tabular-nums">{consents.not_consented?.length || 0}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">未同意（人）</p>
+                    </div>
+                  </div>
+                  {consents.consented?.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">同意済み</p>
+                      <ul className="divide-y divide-slate-100 dark:divide-ink-700">
+                        {consents.consented.map((u) => (
+                          <li key={u.email} className="flex items-center justify-between py-2 text-sm">
+                            <span className="text-slate-800 dark:text-slate-200">{u.name || u.email}</span>
+                            <span className="text-xs text-slate-400">{fmtDateTime(u.agreed_at)}・版{u.eula_version || '—'}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {consents.not_consented?.length > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">未同意</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {consents.not_consented.map((u) => (
+                          <span key={u.email} className="px-2 py-1 rounded-lg bg-warning-50 dark:bg-warning-500/10 text-warning-700 dark:text-warning-400 text-xs">
+                            {u.name || u.email}{u.department ? `（${u.department}）` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </Card>
         )}
       </main>
