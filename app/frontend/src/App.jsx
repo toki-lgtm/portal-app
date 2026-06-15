@@ -33,6 +33,7 @@ import BidsPage from './components/BidsPage'
 import FeedbackPage from './components/FeedbackPage'
 import DocumentsPage from './components/DocumentsPage'
 import WorkScopePage from './components/WorkScopePage'
+import WorkScopeGate from './components/WorkScopeGate'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -1127,6 +1128,8 @@ function AppContent() {
       {view !== 'feedback' && canReportFeedback && (
         <FeedbackFab onClick={() => { setFeedbackSubmitFirst(true); setView('feedback') }} />
       )}
+      {/* 初回アクセス時の WorkScope 導入ゲート（未DLの一般社員に必須表示） */}
+      <WorkScopeGate />
     </>
   )
 }
