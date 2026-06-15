@@ -20,6 +20,7 @@ const APP_LABELS = {
   'announcements': 'お知らせ',
   'bids': '入札案件管理',
   'documents': '文書回覧',
+  'feedback': 'バグ報告・改善 一覧',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
