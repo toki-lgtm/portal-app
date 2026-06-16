@@ -547,6 +547,55 @@ function BoqSection({ detail, notify, onReload }) {
   const summary = boq?.summary || []
   const maxRatio = summary.reduce((m, t) => Math.max(m, t.ratio || 0), 0) || 1
 
+  // ── 階層ツリー（種目→科目→細目→別紙）の表示制御 ──
+  const rows = boq?.rows || []
+  const [expanded, setExpanded] = useState(() => new Set()) // 既定は全折りたたみ（上位のみ表示）
+  const toggle = (path) => setExpanded((s) => {
+    const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n
+  })
+  // 親（子を持つ path）の集合
+  const parentSet = new Set()
+  for (const r of rows) {
+    if (!r.path) continue
+    const parts = String(r.path).split('.')
+    if (parts.length > 1) parentSet.add(parts.slice(0, -1).join('.'))
+  }
+  const isParent = (p) => p != null && parentSet.has(p)
+  // 折りたたみを反映した可視ノード列
+  const visible = []
+  let hidePrefix = null
+  for (const r of rows) {
+    if (hidePrefix && r.path && String(r.path).startsWith(hidePrefix)) continue
+    hidePrefix = null
+    visible.push(r)
+    if (isParent(r.path) && !expanded.has(r.path)) hidePrefix = r.path + '.'
+  }
+  // 小見出し帯（<撤去> や (地区名)）の差し込み位置を計算
+  const treeItems = []
+  let prevParent = null, prevGroup = null
+  for (const r of visible) {
+    const parent = r.path ? String(r.path).split('.').slice(0, -1).join('.') : ''
+    if (r.group_label && !(parent === prevParent && r.group_label === prevGroup)) {
+      treeItems.push({ band: true, key: `band-${r.id}`, level: r.level, label: r.group_label })
+    }
+    treeItems.push({ row: r, key: `row-${r.id}`, parent: isParent(r.path) })
+    prevParent = parent; prevGroup = r.group_label || null
+  }
+  const nTane = rows.filter((r) => r.kind === '種目').length
+  const nKamoku = rows.filter((r) => r.kind === '科目').length
+  const nSaimoku = rows.filter((r) => r.kind === '細目').length
+  const nBeppi = rows.filter((r) => r.kind === '別紙').length
+  const expandAll = () => setExpanded(new Set(parentSet))
+  const collapseAll = () => setExpanded(new Set())
+
+  const kindStyle = {
+    種目: 'font-bold text-slate-800 dark:text-slate-100 bg-slate-100/70 dark:bg-ink-700/60',
+    共通費: 'font-bold text-slate-700 dark:text-slate-200 bg-amber-50/70 dark:bg-amber-900/20',
+    科目: 'font-semibold text-slate-700 dark:text-slate-200',
+    細目: 'text-slate-700 dark:text-slate-200',
+    別紙: 'text-slate-400 dark:text-slate-400',
+  }
+
   return (
     <Card className="px-4 py-3 mb-4">
       <div className="flex items-center justify-between gap-3 mb-2">
@@ -569,17 +618,17 @@ function BoqSection({ detail, notify, onReload }) {
         </p>
       ) : (
         <>
-          <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mb-3">
-            <span>総額 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boq.total)}</span></span>
-            <span>明細 {boq.rows?.length || 0} 件</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mb-3">
+            <span>直接工事費 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boq.total)}</span></span>
+            <span>種目 {nTane} / 科目 {nKamoku} / 細目 {nSaimoku}{nBeppi ? ` / 別紙 ${nBeppi}` : ''}</span>
             <span>取込 {fmtDate(boq.imported_at)}</span>
           </div>
 
-          {/* 工種別 構成比率 */}
+          {/* 工種別 構成比率（科目名そのまま・その他で括らない） */}
           <div className="space-y-1.5">
             {summary.map((t) => (
               <div key={t.trade} className="flex items-center gap-2">
-                <span className="w-28 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate" title={t.trade}>{t.trade}</span>
+                <span className="w-28 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate" title={t.canonical && t.canonical !== t.trade ? `${t.trade}（${t.canonical}）` : t.trade}>{t.trade}</span>
                 <div className="flex-1 h-4 rounded bg-slate-100 dark:bg-ink-700 overflow-hidden">
                   <div className="h-full bg-brand-500/80 rounded" style={{ width: `${((t.ratio || 0) / maxRatio) * 100}%` }} />
                 </div>
@@ -591,36 +640,49 @@ function BoqSection({ detail, notify, onReload }) {
             ))}
           </div>
 
-          {/* 明細（折りたたみ） */}
-          <button onClick={() => setShowItems((s) => !s)}
-            className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showItems ? 'rotate-180' : ''}`} />
-            明細を{showItems ? '隠す' : '表示'}（{boq.rows?.length || 0} 件）
-          </button>
+          {/* 内訳ツリー（種目→科目→細目→別紙：Excel の表記・順序のまま）*/}
+          <div className="mt-3 flex items-center justify-between">
+            <button onClick={() => setShowItems((s) => !s)}
+              className="text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showItems ? 'rotate-180' : ''}`} />
+              内訳を{showItems ? '隠す' : '表示'}
+            </button>
+            {showItems && (
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <button onClick={expandAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて展開</button>
+                <span>/</span>
+                <button onClick={collapseAll} className="hover:text-slate-600 dark:hover:text-slate-200">折りたたむ</button>
+              </div>
+            )}
+          </div>
           {showItems && (
-            <div className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-50 dark:bg-ink-700 text-slate-500 dark:text-slate-300">
-                  <tr>
-                    <th className="text-left px-2 py-1.5 font-semibold">工種</th>
-                    <th className="text-left px-2 py-1.5 font-semibold">名称</th>
-                    <th className="text-right px-2 py-1.5 font-semibold">数量</th>
-                    <th className="text-left px-2 py-1.5 font-semibold">単位</th>
-                    <th className="text-right px-2 py-1.5 font-semibold">金額</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-ink-700">
-                  {(boq.rows || []).map((r) => (
-                    <tr key={r.id} className="text-slate-700 dark:text-slate-200">
-                      <td className="px-2 py-1.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.trade || r.raw_category || '—'}</td>
-                      <td className="px-2 py-1.5">{r.item_name}{r.spec ? <span className="text-slate-400"> ／ {r.spec}</span> : ''}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{r.quantity != null ? Number(r.quantity).toLocaleString('ja-JP') : ''}</td>
-                      <td className="px-2 py-1.5">{r.unit || ''}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{r.amount != null ? fmtYen(r.amount) : ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mt-2 max-h-96 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700/70">
+              {treeItems.map((it) => it.band ? (
+                <div key={it.key} className="px-2 py-1 text-[11px] font-medium text-slate-400 dark:text-slate-500 bg-slate-50/60 dark:bg-ink-700/40"
+                  style={{ paddingLeft: `${0.5 + it.level * 1.1}rem` }}>
+                  {it.label}
+                </div>
+              ) : (
+                <div key={it.key}
+                  className={`flex items-start gap-1.5 px-2 py-1.5 text-xs ${kindStyle[it.row.kind] || ''} ${it.parent ? 'cursor-pointer' : ''}`}
+                  style={{ paddingLeft: `${0.5 + it.row.level * 1.1}rem` }}
+                  onClick={it.parent ? () => toggle(it.row.path) : undefined}>
+                  <span className="w-3.5 shrink-0 pt-0.5">
+                    {it.parent ? <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded.has(it.row.path) ? 'rotate-90' : ''}`} /> : null}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    {it.row.item_name}
+                    {it.row.spec ? <span className="text-slate-400"> ／ {it.row.spec}</span> : ''}
+                    {it.row.beppi_no && it.row.kind === '細目' ? <span className="ml-1 text-[10px] text-brand-500/80">別紙{it.row.beppi_no}</span> : ''}
+                  </span>
+                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-500 dark:text-slate-400">
+                    {it.row.quantity != null ? `${Number(it.row.quantity).toLocaleString('ja-JP')}${it.row.unit || ''}` : ''}
+                  </span>
+                  <span className="w-24 shrink-0 text-right tabular-nums">
+                    {it.row.amount != null ? fmtYen(it.row.amount) : ''}
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </>
