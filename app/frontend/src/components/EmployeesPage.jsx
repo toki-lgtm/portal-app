@@ -22,6 +22,8 @@ const APP_LABELS = {
   'documents': '文書回覧',
   'feedback': 'バグ報告・改善 一覧',
   'workscope': 'WorkScope導入',
+  'construction': '工事管理',
+  'regulations': '法令集',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
