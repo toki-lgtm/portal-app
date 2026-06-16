@@ -2050,34 +2050,58 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
-  // 複数ファイル選択 → ステージに追加
+  // Excel 数量書か判定
+  const isExcelFile = (name) => /\.(xlsx|xlsm|xls)$/i.test(name || '')
+
+  // 複数ファイル選択 → ステージに追加（種別が「変更数量書」のとき boq_mode を併用）
   const onSelectFiles = (e) => {
     const selected = Array.from(e.target.files || [])
     if (!selected.length) return
     setStagedFiles((prev) => [
       ...prev,
-      ...selected.map((file) => ({ file, doc_type: DC_DOC_TYPES[0] })),
+      ...selected.map((file) => ({ file, doc_type: DC_DOC_TYPES[0], boq_mode: 'full' })),
     ])
     e.target.value = ''
   }
 
-  // まとめてアップロード
+  // まとめてアップロード（「変更数量書」のExcelは添付＋数量書取込で数量内訳に反映）
   const onBatchUpload = async () => {
     if (!stagedFiles.length) return
     setBatchUploading(true)
     try {
       const token = localStorage.getItem('authToken')
+      let boqImported = 0
       for (const meta of stagedFiles) {
+        // 1) 関連書類として添付
         const fd = new FormData()
         fd.append('file', meta.file)
         fd.append('doc_type', meta.doc_type)
         await axios.post(
           `${apiUrl}/api/construction/design-changes/${change.id}/files`, fd,
           { headers: { Authorization: `Bearer ${token}` } })
+        // 2) 種別=変更数量書 かつ Excel なら数量書取込（数量内訳・構成比率へ反映）
+        if (meta.doc_type === '変更数量書' && isExcelFile(meta.file.name)) {
+          const bfd = new FormData()
+          bfd.append('file', meta.file)
+          bfd.append('change_id', change.id)
+          bfd.append('boq_mode', meta.boq_mode || 'full')
+          await axios.post(
+            `${apiUrl}/api/construction/projects/${detail.id}/import-boq`, bfd,
+            { headers: { Authorization: `Bearer ${token}` } })
+          boqImported += 1
+        }
       }
       notify(`${stagedFiles.length} 件のファイルをアップロードしました`)
+      if (boqImported > 0) {
+        notify(`変更数量書を取込み、数量内訳・構成比率の「第${change.change_no}回変更後」に反映しました`)
+      }
       setStagedFiles([])
       await loadFiles()
+      // 数量書を取込んだ場合は詳細も再取得して版セレクタ／数量内訳に反映
+      if (boqImported > 0) {
+        await onReload()
+        if (onReloadDetail) await onReloadDetail()
+      }
     } catch (err) {
       notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
     } finally { setBatchUploading(false) }
@@ -2142,6 +2166,7 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
         </p>
         <p className="text-[11px] text-slate-400 mb-3">
           変更指示書・契約書・図面などをまとめて追加できます。ファイルを選んで種別を確認してから「まとめてアップロード」してください。
+          種別を「変更数量書」にしたExcelは、添付と同時に数量内訳・構成比率へ反映されます。
         </p>
 
         {/* ファイル選択ボタン */}
@@ -2156,8 +2181,11 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
         {stagedFiles.length > 0 && (
           <div className="mt-3 space-y-2">
             <ul className="space-y-2">
-              {stagedFiles.map((meta, i) => (
-                <li key={i} className="flex items-center gap-2">
+              {stagedFiles.map((meta, i) => {
+                const isBoq = meta.doc_type === '変更数量書'
+                const boqExcel = isBoq && isExcelFile(meta.file.name)
+                return (
+                <li key={i} className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-slate-600 dark:text-slate-300 truncate flex-1 min-w-0">{meta.file.name}</span>
                   <select
                     className={`${inputCls} w-40 shrink-0`}
@@ -2165,13 +2193,29 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
                     onChange={(e) => setStagedFiles((prev) => prev.map((m, idx) => idx === i ? { ...m, doc_type: e.target.value } : m))}>
                     {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
                   </select>
+                  {boqExcel && (
+                    <select
+                      className="text-xs px-2 py-1 rounded-lg border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 text-brand-700 dark:text-brand-300 shrink-0"
+                      title="数量内訳・構成比率への反映方法"
+                      value={meta.boq_mode || 'full'}
+                      onChange={(e) => setStagedFiles((prev) => prev.map((m, idx) => idx === i ? { ...m, boq_mode: e.target.value } : m))}>
+                      <option value="full">全体版で反映</option>
+                      <option value="delta">変更分のみで反映</option>
+                    </select>
+                  )}
                   <button
                     onClick={() => setStagedFiles((prev) => prev.filter((_, idx) => idx !== i))}
                     className="text-slate-400 hover:text-danger-500 shrink-0" title="この添付を取り消す">
                     <X className="w-4 h-4" />
                   </button>
+                  {isBoq && !boqExcel && (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400 basis-full">
+                      ※ 数量内訳への反映はExcel(.xlsx/.xlsm/.xls)のみ対応です。このファイルは添付のみになります。
+                    </span>
+                  )}
                 </li>
-              ))}
+                )
+              })}
             </ul>
             <div className="flex items-center justify-between pt-2">
               <span className="text-[11px] text-slate-400">{stagedFiles.length} 件を追加待ち</span>
