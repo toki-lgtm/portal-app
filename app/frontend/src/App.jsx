@@ -35,6 +35,7 @@ import FeedbackPage from './components/FeedbackPage'
 import DocumentsPage from './components/DocumentsPage'
 import WorkScopePage from './components/WorkScopePage'
 import WorkScopeGate from './components/WorkScopeGate'
+import RegulationsPage from './components/RegulationsPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -901,7 +902,7 @@ function AppContent() {
   const [documentsUnreadCount, setDocumentsUnreadCount] = useState(0)
   // バグ報告・改善の利用権限（FAB表示判定。member 以上で報告可）
   const [canReportFeedback, setCanReportFeedback] = useState(false)
-  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents' | 'workscope'
+  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents' | 'workscope' | 'regulations'
   const [view, setView] = useState('dashboard')
   // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
   const [feedbackSubmitFirst, setFeedbackSubmitFirst] = useState(false)
@@ -1102,6 +1103,8 @@ function AppContent() {
     page = <FeedbackPage onBack={() => setView('dashboard')} startInSubmit={feedbackSubmitFirst} />
   } else if (view === 'workscope') {
     page = <WorkScopePage onBack={() => setView('dashboard')} />
+  } else if (view === 'regulations') {
+    page = <RegulationsPage onBack={() => setView('dashboard')} />
   } else {
     page = (
       <DashboardPage
