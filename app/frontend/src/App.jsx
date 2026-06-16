@@ -30,6 +30,7 @@ import SettingsPage from './components/SettingsPage'
 import EmployeesPage from './components/EmployeesPage'
 import AnnouncementsPage from './components/AnnouncementsPage'
 import BidsPage from './components/BidsPage'
+import ConstructionPage from './components/ConstructionPage'
 import FeedbackPage from './components/FeedbackPage'
 import DocumentsPage from './components/DocumentsPage'
 import WorkScopePage from './components/WorkScopePage'
@@ -1078,6 +1079,8 @@ function AppContent() {
     page = <AnnouncementsPage onBack={() => setView('dashboard')} />
   } else if (view === 'bids') {
     page = <BidsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'construction') {
+    page = <ConstructionPage onBack={() => setView('dashboard')} />
   } else if (view === 'documents') {
     page = (
       <DocumentsPage
