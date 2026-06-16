@@ -428,6 +428,7 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
   const [docType, setDocType] = useState('設計書')
   const [importing, setImporting] = useState(false)
   const [promoting, setPromoting] = useState(false)
+  const [uploadCount, setUploadCount] = useState({ done: 0, total: 0 })
 
   const load = useCallback(async () => {
     try {
@@ -480,22 +481,31 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
   }
 
   const uploadDoc = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
     setUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('doc_type', docType)
-      await axios.post(`${apiUrl}/api/bids/${id}/documents`, fd, authConfig())
-      showToast('success', '資料をアップロードしました')
-      load()
-    } catch (err) {
-      showToast('error', err.response?.data?.error || 'アップロードに失敗しました')
-    } finally {
-      setUploading(false)
-      e.target.value = ''
+    setUploadCount({ done: 0, total: files.length })
+    let ok = 0
+    const failed = []
+    for (const file of files) {
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        fd.append('doc_type', docType)
+        await axios.post(`${apiUrl}/api/bids/${id}/documents`, fd, authConfig())
+        ok++
+      } catch (err) {
+        failed.push(file.name)
+      } finally {
+        setUploadCount((c) => ({ ...c, done: c.done + 1 }))
+      }
     }
+    setUploading(false)
+    setUploadCount({ done: 0, total: 0 })
+    e.target.value = ''
+    if (ok) showToast('success', `${ok}件の資料をアップロードしました${failed.length ? `（${failed.length}件失敗）` : ''}`)
+    else showToast('error', 'アップロードに失敗しました')
+    load()
   }
 
   // 積算データ(Excel)を取込 → 積算金額を自動入力＋資料添付
@@ -681,8 +691,10 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
             </select>
             <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 cursor-pointer">
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              {uploading ? 'アップロード中...' : '資料を追加'}
-              <input type="file" className="hidden" onChange={uploadDoc} disabled={uploading} />
+              {uploading
+                ? `アップロード中${uploadCount.total > 1 ? ` (${uploadCount.done}/${uploadCount.total})` : ''}...`
+                : '資料を追加（複数可）'}
+              <input type="file" multiple className="hidden" onChange={uploadDoc} disabled={uploading} />
             </label>
           </div>
           {(!bid.documents || bid.documents.length === 0) ? (
