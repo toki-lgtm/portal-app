@@ -1676,7 +1676,7 @@ function NewDesignChangeModal({ detail, draft, confidence, summary, extractedFil
   )
 }
 
-// ── 設計変更 編集モーダル ──
+// ── 設計変更 編集モーダル（後から資料を追加してAI反映できる）──
 function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
   const [f, setF] = useState({
     reason_category: change.reason_category || '',
@@ -1692,6 +1692,50 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
   })
   const [saving, setSaving] = useState(false)
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+
+  // 後から資料を追加してAI反映
+  const [extractBusy, setExtractBusy] = useState(false)
+  const [aiFields, setAiFields] = useState({})     // 直近のAI反映で更新した項目
+  const [aiInfo, setAiInfo] = useState(null)        // { confidence, summary }
+  const [fileMeta, setFileMeta] = useState([])      // 追加添付する書類 [{ file, doc_type }]
+
+  // 複数資料を読み込み → extract → 非空のAI値をフォームへ反映 ＋ 添付候補に追加
+  const onAddDocs = async (e) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setExtractBusy(true)
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/design-changes/extract`, fd,
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      const draft = data?.draft || {}
+      const updated = {}
+      setF((s) => {
+        const next = { ...s }
+        for (const [k, v] of Object.entries(draft)) {
+          if (v == null || v === '' || !(k in next)) continue
+          next[k] = (k === 'amount_after') ? String(v) : v
+          updated[k] = v
+        }
+        return next
+      })
+      setAiFields((prev) => ({ ...prev, ...updated }))
+      setAiInfo({ confidence: data?.confidence ?? null, summary: data?.summary || null })
+      setFileMeta((prev) => [
+        ...prev,
+        ...Array.from(files).map((file) => ({ file, doc_type: DC_DOC_TYPES[0] })),
+      ])
+    } catch (err) {
+      onError(err.response?.data?.error || '書類の読み取りに失敗しました')
+    } finally {
+      setExtractBusy(false)
+      e.target.value = ''
+    }
+  }
 
   const submit = async () => {
     if (!f.title.trim()) { onError('変更タイトルは必須です'); return }
@@ -1711,6 +1755,21 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
         note: f.note,
       }
       await axios.patch(`${apiUrl}/api/construction/design-changes/${change.id}`, payload, authConfig())
+
+      // 後から追加した資料を関連書類として添付
+      if (fileMeta.length > 0) {
+        const token = localStorage.getItem('authToken')
+        for (const meta of fileMeta) {
+          const ffd = new FormData()
+          ffd.append('file', meta.file)
+          ffd.append('doc_type', meta.doc_type)
+          await axios.post(
+            `${apiUrl}/api/construction/design-changes/${change.id}/files`, ffd,
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+        }
+      }
+
       onSaved()
     } catch (e) {
       onError(e.response?.data?.error || '更新に失敗しました')
@@ -1725,7 +1784,61 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
           この変更は工事基本情報へ反映済みです。金額・工期を変更した場合は再度「反映」を行ってください。
         </div>
       )}
-      <DcFormFields f={f} set={set} currentDetail={detail} />
+
+      {/* 後から資料を追加してAI反映 */}
+      <div className="mb-4 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Sparkles className="w-4 h-4 text-brand-500 shrink-0" />
+            <span className="text-xs font-semibold text-brand-700 dark:text-brand-300">追加資料を読み込んで反映</span>
+            {aiInfo?.confidence != null && (
+              <span className="text-[11px] text-slate-400">信頼度 {Math.round(aiInfo.confidence * 100)}%</span>
+            )}
+          </div>
+          <label className={`text-xs font-semibold cursor-pointer flex items-center gap-1 px-3 py-1.5 rounded-xl border transition-colors shrink-0
+            ${extractBusy
+              ? 'opacity-60 cursor-not-allowed border-brand-200 dark:border-brand-500/30 text-brand-600 dark:text-brand-400'
+              : 'border-brand-300 dark:border-brand-500/40 bg-white dark:bg-ink-800 text-brand-600 dark:text-brand-400 hover:bg-brand-100 dark:hover:bg-brand-500/20'}`}>
+            {extractBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+            資料を追加
+            <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" className="hidden" onChange={onAddDocs} disabled={extractBusy} />
+          </label>
+        </div>
+        {aiInfo?.summary && (
+          <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed mt-1">{aiInfo.summary}</p>
+        )}
+        <p className="text-[11px] text-slate-400 mt-1">複数選択できます。<AiBadge /> の項目が今回反映されました。内容を確認・修正して保存してください。</p>
+      </div>
+
+      <DcFormFieldsWithBadge f={f} set={set} currentDetail={detail} aiFields={aiFields} />
+
+      {/* 追加した書類の添付（保存時に添付）*/}
+      {fileMeta.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-100 dark:border-ink-700">
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1">
+            <Paperclip className="w-3.5 h-3.5" /> 追加した書類を添付（書類種別を確認してください）
+          </p>
+          <ul className="space-y-2">
+            {fileMeta.map((meta, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <span className="text-xs text-slate-600 dark:text-slate-300 truncate flex-1 min-w-0">{meta.file.name}</span>
+                <select
+                  className={`${inputCls} w-40 shrink-0`}
+                  value={meta.doc_type}
+                  onChange={(e) => setFileMeta((prev) => prev.map((m, idx) => idx === i ? { ...m, doc_type: e.target.value } : m))}>
+                  {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
+                </select>
+                <button
+                  onClick={() => setFileMeta((prev) => prev.filter((_, idx) => idx !== i))}
+                  className="text-slate-400 hover:text-danger-500 shrink-0" title="この添付を取り消す">
+                  <X className="w-4 h-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
         <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />保存</>}</Button>
