@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Save, Search, Loader2, Building2, ListChecks,
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
-  Paperclip, Trash2, Upload, ExternalLink, Gavel,
+  Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -329,6 +329,7 @@ function KpiCard({ icon, label, value, tone }) {
 function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
   const docs = detail.documents || []
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
+  const [aiUploading, setAiUploading] = useState(false)
 
   const changeStatus = async (doc, status) => {
     try {
@@ -336,6 +337,32 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
       onReload()
     } catch (e) {
       notify(e.response?.data?.error || 'ステータス更新に失敗しました', 'error')
+    }
+  }
+
+  // 書類をアップロード→Geminiが内容を読み取り、該当する提出書類へ自動で振り分けて添付
+  const onAiUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setAiUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/documents/auto-file`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      const c = data.classification
+      const where = `${data.document.category_no}. ${data.document.category} ＞ ${data.document.doc_name}`
+      notify(c
+        ? `「${where}」に自動振り分けしました（確信度 ${Math.round((c.confidence || 0) * 100)}%）`
+        : `「${where}」に添付しました（AI判定なし。種別をご確認ください）`)
+      onReload()
+    } catch (err) {
+      notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
+    } finally {
+      setAiUploading(false)
+      e.target.value = ''
     }
   }
 
@@ -385,11 +412,18 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
         </div>
       </Card>
 
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-2 gap-3">
         <h2 className="text-sm font-bold text-slate-700 dark:text-slate-200">提出書類チェックリスト</h2>
-        <button onClick={onAddDoc} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
-          <Plus className="w-3.5 h-3.5" /> 書類を追加
-        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、該当する提出書類へ自動で振り分けます">
+            {aiUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            AIで振り分けアップロード
+            <input type="file" className="hidden" onChange={onAiUpload} disabled={aiUploading} />
+          </label>
+          <button onClick={onAddDoc} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" /> 書類を追加
+          </button>
+        </div>
       </div>
 
       {docs.length === 0 ? (
@@ -451,6 +485,11 @@ function DocRow({ doc, onChangeStatus, onEdit }) {
               <Paperclip className="w-3 h-3" />{doc.files.length}
             </span>
           )}
+          {doc.files?.some((f) => f.source && f.source !== 'manual') && (
+            <span className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-0.5" title="AIが自動で振り分けた書類を含みます。種別をご確認ください">
+              <Sparkles className="w-3 h-3" />AI振分
+            </span>
+          )}
         </div>
       </div>
       <select
@@ -476,7 +515,45 @@ function NewProjectModal({ onClose, onCreated, onError }) {
   })
   const [genChecklist, setGenChecklist] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiMsg, setAiMsg] = useState('')
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+
+  // 契約・設計図書などをアップロード→Geminiが工事情報を読み取り、空欄を自動入力
+  const onAiPrefill = async (e) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setAiBusy(true); setAiMsg('')
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(`${apiUrl}/api/construction/extract-info`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      const x = data.fields || {}
+      // 空欄のみ補完（既入力は尊重）。発注者・工種・区分は読み取れた値があれば反映。
+      setF((s) => ({
+        ...s,
+        project_name: s.project_name || x.project_name || '',
+        project_code: s.project_code || x.project_code || '',
+        client_org: x.client_org || s.client_org,
+        construction_type: x.construction_type || s.construction_type,
+        work_category: x.work_category || s.work_category,
+        location: s.location || x.location || '',
+        contract_amount: s.contract_amount || (x.contract_amount != null ? String(x.contract_amount) : ''),
+        contract_date: s.contract_date || x.contract_date || '',
+        start_date: s.start_date || x.start_date || '',
+        end_date: s.end_date || x.end_date || '',
+        completion_inspection_date: s.completion_inspection_date || x.completion_inspection_date || '',
+      }))
+      setAiMsg(`書類から読み取りました：${(data.used_files || []).join('、')}（内容をご確認ください）`)
+    } catch (err) {
+      onError(err.response?.data?.error || 'AI読み取りに失敗しました')
+    } finally {
+      setAiBusy(false)
+      e.target.value = ''
+    }
+  }
 
   const submit = async () => {
     if (!f.project_name.trim()) { onError('工事名は必須です'); return }
@@ -494,6 +571,23 @@ function NewProjectModal({ onClose, onCreated, onError }) {
 
   return (
     <ModalShell title="工事を追加" onClose={onClose} wide>
+      {/* 書類からAI自動入力（契約・設計図書をアップロードすると工事情報を読み取る） */}
+      <div className="mb-4 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-600 dark:text-slate-300">
+            <span className="font-semibold text-brand-700 dark:text-brand-300 flex items-center gap-1">
+              <Sparkles className="w-3.5 h-3.5" />書類から自動入力
+            </span>
+            契約書・設計図書・特記仕様書などをアップロードすると、工事名・契約日・工期などをAIが読み取ります。
+          </div>
+          <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
+            {aiBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+            書類を選択
+            <input type="file" multiple className="hidden" onChange={onAiPrefill} disabled={aiBusy} />
+          </label>
+        </div>
+        {aiMsg && <p className="mt-2 text-[11px] text-success-700 dark:text-success-300">{aiMsg}</p>}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="md:col-span-2"><Field label="工事名 *"><input className={inputCls} value={f.project_name} onChange={set('project_name')} placeholder="○○(6)庁舎新設等建築工事" /></Field></div>
         <Field label="工事番号"><input className={inputCls} value={f.project_code} onChange={set('project_code')} /></Field>

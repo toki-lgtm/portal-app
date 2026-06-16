@@ -456,11 +456,16 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
 
   // 受注案件を工事管理の工事へ昇格（情報を引き継ぎ＋必要書類を自動生成）
   const promoteToConstruction = async () => {
-    if (!confirm(`「${bid.project_name}」を工事管理の工事として登録しますか？\n発注者・場所・契約金額を引き継ぎ、必要書類チェックリストを自動生成します。`)) return
+    if (!confirm(`「${bid.project_name}」を工事管理の工事として登録しますか？\n発注者・場所・契約金額に加え、入札でアップロードした書類も工事へ引き継ぎます。\n設計図書等から工事情報をAIが読み取り、各資料を自動で振り分けます。`)) return
     setPromoting(true)
     try {
       const res = await axios.post(`${apiUrl}/api/construction/projects/from-bid/${id}`, {}, authConfig())
-      showToast('success', `工事へ昇格しました（書類 ${res.data.generated_documents || 0} 件を自動生成）。工事管理アプリで確認できます`)
+      const d = res.data || {}
+      const extra = []
+      if (d.carried_files) extra.push(`入札資料${d.carried_files}件を引継ぎ`)
+      if (d.ai_extracted) extra.push('工事情報をAI反映')
+      if (d.ai_classified) extra.push(`うち${d.ai_classified}件をAI自動振分`)
+      showToast('success', `工事へ昇格しました（書類${d.generated_documents || 0}件を自動生成${extra.length ? '／' + extra.join('・') : ''}）。工事管理アプリで確認できます`)
     } catch (err) {
       showToast('error', err.response?.data?.error || '工事への昇格に失敗しました')
     } finally {
