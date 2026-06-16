@@ -4,6 +4,7 @@ import {
   ArrowLeft, Plus, X, Save, Search, Loader2, Building2, ListChecks,
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
   Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
+  BarChart3, FileSpreadsheet, ChevronDown,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -67,6 +68,14 @@ function fmtBytes(b) {
   if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)}MB`
   if (b >= 1024) return `${Math.round(b / 1024)}KB`
   return `${b}B`
+}
+function fmtYen(n) {
+  if (n == null) return '—'
+  return `¥${Math.round(n).toLocaleString('ja-JP')}`
+}
+function fmtPct(r) {
+  if (r == null) return '—'
+  return `${(r * 100).toFixed(1)}%`
 }
 // 締切の状態（期限超過 / 間近14日 / 通常）
 function dueState(due) {
@@ -440,6 +449,8 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
         </div>
       </Card>
 
+      <BoqSection detail={detail} notify={notify} onReload={onReload} />
+
       <div className="flex items-center justify-between mb-2 gap-3">
         <h2 className="text-sm font-bold text-slate-700 dark:text-slate-200">提出書類チェックリスト</h2>
         <div className="flex items-center gap-3 shrink-0">
@@ -489,6 +500,205 @@ function Meta({ label, value }) {
       <div className="text-[11px] text-slate-400">{label}</div>
       <div className="text-slate-800 dark:text-slate-200">{value || '—'}</div>
     </div>
+  )
+}
+
+// ── 数量内訳・構成比率セクション ──
+function BoqSection({ detail, notify, onReload }) {
+  const [boq, setBoq] = useState(null)        // { rows, summary, total, imported_at }
+  const [loading, setLoading] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [showItems, setShowItems] = useState(false)
+  const [naModal, setNaModal] = useState(null) // NA候補（取込直後の承認用）
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/construction/projects/${detail.id}/boq`, authConfig())
+      setBoq(data)
+    } catch { /* noop */ } finally { setLoading(false) }
+  }, [detail.id])
+
+  useEffect(() => { load() }, [load])
+
+  const onUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/import-boq`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      notify(`数量書を取込みました（明細 ${data.line_count} 件・総額 ${fmtYen(data.total)}）`)
+      await load()
+      if ((data.na_candidates || []).length > 0) setNaModal(data.na_candidates)
+      else notify('数量書の工種に該当しない書類はありませんでした')
+    } catch (err) {
+      notify(err.response?.data?.error || '数量書の取込に失敗しました', 'error')
+    } finally {
+      setUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  const summary = boq?.summary || []
+  const maxRatio = summary.reduce((m, t) => Math.max(m, t.ratio || 0), 0) || 1
+
+  return (
+    <Card className="px-4 py-3 mb-4">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+          <BarChart3 className="w-4 h-4 text-brand-500" /> 数量内訳・構成比率
+        </span>
+        <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1"
+          title="数量書(内訳書 .xlsx)を取込み、工事内容・数量・金額を保存して工種別の構成比率を算出します">
+          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+          {boq?.imported_at ? '数量書を再取込' : '数量書(xlsx)を取込'}
+          <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onUpload} disabled={uploading} />
+        </label>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
+      ) : !boq?.imported_at ? (
+        <p className="text-xs text-slate-400 py-2">
+          数量書(内訳書)を取込むと、工種別の構成比率を算出し、数量書に無い工種の施工計画書などをチェックリストから対象外にできます。
+        </p>
+      ) : (
+        <>
+          <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mb-3">
+            <span>総額 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boq.total)}</span></span>
+            <span>明細 {boq.rows?.length || 0} 件</span>
+            <span>取込 {fmtDate(boq.imported_at)}</span>
+          </div>
+
+          {/* 工種別 構成比率 */}
+          <div className="space-y-1.5">
+            {summary.map((t) => (
+              <div key={t.trade} className="flex items-center gap-2">
+                <span className="w-28 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate" title={t.trade}>{t.trade}</span>
+                <div className="flex-1 h-4 rounded bg-slate-100 dark:bg-ink-700 overflow-hidden">
+                  <div className="h-full bg-brand-500/80 rounded" style={{ width: `${((t.ratio || 0) / maxRatio) * 100}%` }} />
+                </div>
+                <span className="w-14 shrink-0 text-right text-xs font-semibold text-slate-700 dark:text-slate-200 tabular-nums">
+                  {fmtPct(t.ratio)}
+                </span>
+                <span className="w-24 shrink-0 text-right text-[11px] text-slate-400 tabular-nums">{fmtYen(t.amount)}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* 明細（折りたたみ） */}
+          <button onClick={() => setShowItems((s) => !s)}
+            className="mt-3 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showItems ? 'rotate-180' : ''}`} />
+            明細を{showItems ? '隠す' : '表示'}（{boq.rows?.length || 0} 件）
+          </button>
+          {showItems && (
+            <div className="mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-50 dark:bg-ink-700 text-slate-500 dark:text-slate-300">
+                  <tr>
+                    <th className="text-left px-2 py-1.5 font-semibold">工種</th>
+                    <th className="text-left px-2 py-1.5 font-semibold">名称</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">数量</th>
+                    <th className="text-left px-2 py-1.5 font-semibold">単位</th>
+                    <th className="text-right px-2 py-1.5 font-semibold">金額</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-ink-700">
+                  {(boq.rows || []).map((r) => (
+                    <tr key={r.id} className="text-slate-700 dark:text-slate-200">
+                      <td className="px-2 py-1.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{r.trade || r.raw_category || '—'}</td>
+                      <td className="px-2 py-1.5">{r.item_name}{r.spec ? <span className="text-slate-400"> ／ {r.spec}</span> : ''}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{r.quantity != null ? Number(r.quantity).toLocaleString('ja-JP') : ''}</td>
+                      <td className="px-2 py-1.5">{r.unit || ''}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{r.amount != null ? fmtYen(r.amount) : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {naModal && (
+        <NaConfirmModal
+          projectId={detail.id}
+          candidates={naModal}
+          onClose={() => setNaModal(null)}
+          onApplied={(n) => { setNaModal(null); notify(`${n} 件を対象外にしました`); onReload() }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+    </Card>
+  )
+}
+
+// ── 不要書類の対象外(na)化 承認モーダル ──
+function NaConfirmModal({ projectId, candidates, onClose, onApplied, onError }) {
+  const [checked, setChecked] = useState(() => new Set(candidates.map((c) => c.id)))
+  const [saving, setSaving] = useState(false)
+  const toggle = (id) => setChecked((s) => {
+    const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n
+  })
+
+  // 工種ごとにグループ表示
+  const groups = {}
+  for (const c of candidates) (groups[c.trade] = groups[c.trade] || []).push(c)
+
+  const apply = async () => {
+    setSaving(true)
+    try {
+      const ids = [...checked]
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${projectId}/apply-checklist-filter`,
+        { document_ids: ids }, authConfig())
+      onApplied(data.updated ?? ids.length)
+    } catch (e) {
+      onError(e.response?.data?.error || '適用に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title="数量書に無い工種の書類を対象外にしますか？" onClose={onClose} wide>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+        取込んだ数量書に該当工種が見当たらない書類です。チェックした書類を「対象外(na)」にします
+        （削除ではありません。後からステータスを戻せば復活します）。
+      </p>
+      <div className="max-h-96 overflow-y-auto space-y-3">
+        {Object.keys(groups).sort().map((trade) => (
+          <div key={trade}>
+            <div className="flex items-center gap-2 mb-1">
+              <Badge tone="neutral">{trade}</Badge>
+              <span className="text-[11px] text-slate-400">{groups[trade].length} 件</span>
+            </div>
+            <div className="border border-slate-200 dark:border-ink-700 rounded-xl divide-y divide-slate-100 dark:divide-ink-700">
+              {groups[trade].map((c) => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer">
+                  <input type="checkbox" checked={checked.has(c.id)} onChange={() => toggle(c.id)} />
+                  <span className="text-xs text-slate-400 w-8 shrink-0">{c.category_no}.</span>
+                  <span className="text-sm text-slate-700 dark:text-slate-200 truncate">{c.doc_name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between mt-5">
+        <span className="text-xs text-slate-500">{checked.size} / {candidates.length} 件を選択中</span>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
+          <Button onClick={apply} disabled={saving || checked.size === 0}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <>対象外にする（{checked.size}件）</>}
+          </Button>
+        </div>
+      </div>
+    </ModalShell>
   )
 }
 
