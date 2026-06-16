@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Save, Search, Loader2, Building2, ListChecks,
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
-  Paperclip, Trash2, Upload, ExternalLink,
+  Paperclip, Trash2, Upload, ExternalLink, Gavel,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -351,6 +351,11 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {detail.client_org}{detail.location ? ` ／ ${detail.location}` : ''}
           </p>
+          {detail.bid && (
+            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+              <Gavel className="w-3 h-3" /> 入札連携: {detail.bid.project_name}
+            </p>
+          )}
         </div>
         {detail.drive_folder_url && (
           <a href={detail.drive_folder_url} target="_blank" rel="noreferrer"

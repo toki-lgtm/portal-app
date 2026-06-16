@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, Pencil, Trash2, X, Save, Search, Loader2, Gavel,
   FileText, Upload, Download, Clock, BarChart3, ListChecks, AlertTriangle,
-  Sparkles,
+  Sparkles, Building2,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -427,6 +427,7 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
   const [uploading, setUploading] = useState(false)
   const [docType, setDocType] = useState('設計書')
   const [importing, setImporting] = useState(false)
+  const [promoting, setPromoting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -449,6 +450,20 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
       onChanged()
     } catch {
       showToast('error', 'ステータス更新に失敗しました')
+    }
+  }
+
+  // 受注案件を工事管理の工事へ昇格（情報を引き継ぎ＋必要書類を自動生成）
+  const promoteToConstruction = async () => {
+    if (!confirm(`「${bid.project_name}」を工事管理の工事として登録しますか？\n発注者・場所・契約金額を引き継ぎ、必要書類チェックリストを自動生成します。`)) return
+    setPromoting(true)
+    try {
+      const res = await axios.post(`${apiUrl}/api/construction/projects/from-bid/${id}`, {}, authConfig())
+      showToast('success', `工事へ昇格しました（書類 ${res.data.generated_documents || 0} 件を自動生成）。工事管理アプリで確認できます`)
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '工事への昇格に失敗しました')
+    } finally {
+      setPromoting(false)
     }
   }
 
@@ -560,6 +575,11 @@ function BidDetailModal({ id, isAdmin, onClose, onEdit, onChanged, showToast }) 
         >
           {STATUS_DEFS.map((s) => <option key={s.key} value={s.key}>{s.label}に変更</option>)}
         </select>
+        {['won', 'contracted'].includes(bid.status) && (
+          <Button variant="accent" size="sm" onClick={promoteToConstruction} disabled={promoting}>
+            {promoting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Building2 className="w-4 h-4" />}工事へ昇格
+          </Button>
+        )}
         {isAdmin && (
         <div className="ml-auto flex gap-2">
           <Button variant="danger" size="sm" onClick={handleDelete}><Trash2 className="w-4 h-4" />削除</Button>
