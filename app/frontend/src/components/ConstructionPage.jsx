@@ -373,6 +373,8 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
   const docs = detail.documents || []
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
   const [aiUploading, setAiUploading] = useState(false)
+  const [reflectBusy, setReflectBusy] = useState(false)
+  const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
 
   const changeStatus = async (doc, status) => {
     try {
@@ -409,6 +411,24 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
     }
   }
 
+  // 契約書・設計図書をアップロード→AIが工事情報を読み取り→確認のうえ既存の工事内容へ反映
+  const onContractReflect = async (e) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setReflectBusy(true)
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const { data } = await axios.post(`${apiUrl}/api/construction/extract-info`, fd, authConfig())
+      setReflect({ fields: data.fields || {}, used_files: data.used_files || [] })
+    } catch (err) {
+      notify(err.response?.data?.error || 'AI読み取りに失敗しました', 'error')
+    } finally {
+      setReflectBusy(false)
+      e.target.value = ''
+    }
+  }
+
   return (
     <div>
       <div className="flex items-start justify-between gap-3 mb-2">
@@ -428,6 +448,12 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
           )}
         </div>
         <div className="shrink-0 flex items-center gap-3">
+          <label title="契約書・設計図書をアップロードすると、AIが工事番号・契約金額・工期などを読み取り、確認のうえ工事内容へ反映します"
+            className="flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer">
+            {reflectBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            契約書から反映
+            <input type="file" multiple className="hidden" onChange={onContractReflect} disabled={reflectBusy} />
+          </label>
           {detail.drive_folder_url && (
             <a href={detail.drive_folder_url} target="_blank" rel="noreferrer"
               className="flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline">
@@ -506,6 +532,17 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
           })}
         </div>
       )}
+
+      {reflect && (
+        <ContractReflectModal
+          detail={detail}
+          fields={reflect.fields}
+          usedFiles={reflect.used_files}
+          onClose={() => setReflect(null)}
+          onSaved={(msg) => { setReflect(null); onReload(); notify(msg) }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
     </div>
   )
 }
@@ -516,6 +553,103 @@ function Meta({ label, value }) {
       <div className="text-[11px] text-slate-400">{label}</div>
       <div className="text-slate-800 dark:text-slate-200">{value || '—'}</div>
     </div>
+  )
+}
+
+// ── 契約書から工事内容へAI反映（既存工事の更新）──
+// extract-info で抽出した値を現在値と対比し、選んだ項目だけ PUT で上書き（誤反映防止に確認を挟む）
+const REFLECT_DATE_KEYS = new Set(['contract_date', 'start_date', 'end_date', 'completion_inspection_date'])
+const REFLECT_FIELDS = [
+  { key: 'project_name', label: '工事名' },
+  { key: 'project_code', label: '工事番号' },
+  { key: 'client_org', label: '発注者' },
+  { key: 'construction_type', label: '工種大別' },
+  { key: 'work_category', label: '工事区分' },
+  { key: 'location', label: '工事場所' },
+  { key: 'contract_amount', label: '契約金額', fmt: fmtYen },
+  { key: 'contract_date', label: '契約日', fmt: fmtDate },
+  { key: 'start_date', label: '着工日', fmt: fmtDate },
+  { key: 'end_date', label: '工期末', fmt: fmtDate },
+  { key: 'completion_inspection_date', label: '完成検査(予定)日', fmt: fmtDate },
+]
+
+function ContractReflectModal({ detail, fields, usedFiles, onClose, onSaved, onError }) {
+  // 比較用に正規化（日付は先頭10文字、金額は数値文字列、他はtrim）
+  const norm = (key, v) => {
+    if (v == null) return ''
+    if (REFLECT_DATE_KEYS.has(key)) return String(v).slice(0, 10)
+    if (key === 'contract_amount') return v === '' ? '' : String(Number(v))
+    return String(v).trim()
+  }
+  // 読み取れた かつ 現在値と異なる 項目のみ反映候補にする
+  const diffs = REFLECT_FIELDS
+    .map((fld) => ({ ...fld, newRaw: fields[fld.key], newVal: norm(fld.key, fields[fld.key]), curVal: norm(fld.key, detail[fld.key]) }))
+    .filter((d) => d.newVal !== '' && d.newVal !== d.curVal)
+
+  const [sel, setSel] = useState(() => new Set(diffs.map((d) => d.key)))
+  const [saving, setSaving] = useState(false)
+  const toggle = (key) => setSel((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n })
+
+  const fmtVal = (fld, raw) => {
+    if (raw == null || raw === '') return '—'
+    return fld.fmt ? fld.fmt(raw) : String(raw)
+  }
+
+  const submit = async () => {
+    const payload = {}
+    for (const d of diffs) if (sel.has(d.key)) payload[d.key] = d.newRaw
+    if (!Object.keys(payload).length) { onError('反映する項目が選択されていません'); return }
+    setSaving(true)
+    try {
+      await axios.put(`${apiUrl}/api/construction/projects/${detail.id}`, payload, authConfig())
+      onSaved(`工事内容を更新しました（${Object.keys(payload).length}項目）`)
+    } catch (e) {
+      onError(e.response?.data?.error || '更新に失敗しました')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell title="契約書から工事内容へ反映" onClose={onClose} wide>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+        読み取った書類：{usedFiles.length ? usedFiles.join('、') : '—'}
+      </p>
+      {diffs.length === 0 ? (
+        <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+          書類から読み取れた内容は、現在の工事情報と差異がありませんでした。
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            変更がある項目のみ表示しています。反映する項目にチェックを入れて「反映」を押してください。
+          </p>
+          <div className="space-y-1">
+            {diffs.map((d) => (
+              <label key={d.key} className="flex items-start gap-2 p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-ink-700/50 cursor-pointer">
+                <input type="checkbox" className="mt-1 shrink-0" checked={sel.has(d.key)} onChange={() => toggle(d.key)} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">{d.label}</div>
+                  <div className="flex items-center gap-2 text-sm mt-0.5 flex-wrap">
+                    <span className="text-slate-400 line-through">{fmtVal(d, detail[d.key])}</span>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                    <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtVal(d, d.newRaw)}</span>
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
+        {diffs.length > 0 && (
+          <Button onClick={submit} disabled={saving || sel.size === 0}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />反映（{sel.size}項目）</>}
+          </Button>
+        )}
+      </div>
+    </ModalShell>
   )
 }
 
