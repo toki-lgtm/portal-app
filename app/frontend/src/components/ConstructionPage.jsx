@@ -194,6 +194,24 @@ export default function ConstructionPage({ onBack }) {
     } catch { /* noop */ }
   }, [detail?.id])
 
+  const isAdmin = stats?.role === 'admin'
+
+  const deleteProject = useCallback(async (proj) => {
+    if (!proj?.id) return
+    const ok = window.confirm(
+      `工事「${proj.project_name}」を削除します。\n` +
+      'この工事と提出書類チェックリストは一覧から見えなくなります。\n\nよろしいですか？'
+    )
+    if (!ok) return
+    try {
+      await axios.delete(`${apiUrl}/api/construction/projects/${proj.id}`, authConfig())
+      notify('工事を削除しました')
+      setView('list'); setDetail(null); loadList()
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }, [notify, loadList])
+
   const filtered = projects.filter((p) => {
     if (!q) return true
     const n = q.toLowerCase()
@@ -292,6 +310,8 @@ export default function ConstructionPage({ onBack }) {
           onReload={reloadDetail}
           onEditDoc={(d) => setEditDoc(d)}
           onAddDoc={() => setAddDocOpen(true)}
+          isAdmin={isAdmin}
+          onDelete={() => deleteProject(detail)}
           notify={notify}
         />
       )}
@@ -326,7 +346,7 @@ function KpiCard({ icon, label, value, tone }) {
 }
 
 // ── 詳細本体（工事メタ＋フェーズ別書類チェックリスト）──
-function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
+function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, notify }) {
   const docs = detail.documents || []
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
   const [aiUploading, setAiUploading] = useState(false)
@@ -384,12 +404,20 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
             </p>
           )}
         </div>
-        {detail.drive_folder_url && (
-          <a href={detail.drive_folder_url} target="_blank" rel="noreferrer"
-            className="shrink-0 flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline">
-            <FolderOpen className="w-4 h-4" /> 共有フォルダ
-          </a>
-        )}
+        <div className="shrink-0 flex items-center gap-3">
+          {detail.drive_folder_url && (
+            <a href={detail.drive_folder_url} target="_blank" rel="noreferrer"
+              className="flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline">
+              <FolderOpen className="w-4 h-4" /> 共有フォルダ
+            </a>
+          )}
+          {isAdmin && (
+            <button onClick={onDelete} title="この工事を削除（管理者のみ）"
+              className="flex items-center gap-1 text-xs font-semibold text-danger-600 dark:text-danger-400 hover:underline">
+              <Trash2 className="w-4 h-4" /> 工事を削除
+            </button>
+          )}
+        </div>
       </div>
 
       <Card className="px-4 py-3 mb-4">
