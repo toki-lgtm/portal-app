@@ -519,6 +519,92 @@ function Meta({ label, value }) {
   )
 }
 
+// ── BoqSection 内部で使うツリー描画ユーティリティ ──
+function buildTreeItems(rows, expanded) {
+  const parentSet = new Set()
+  for (const r of rows) {
+    if (!r.path) continue
+    const parts = String(r.path).split('.')
+    if (parts.length > 1) parentSet.add(parts.slice(0, -1).join('.'))
+  }
+  const isParent = (p) => p != null && parentSet.has(p)
+  const visible = []
+  let hidePrefix = null
+  for (const r of rows) {
+    if (hidePrefix && r.path && String(r.path).startsWith(hidePrefix)) continue
+    hidePrefix = null
+    visible.push(r)
+    if (isParent(r.path) && !expanded.has(r.path)) hidePrefix = r.path + '.'
+  }
+  const treeItems = []
+  let prevParent = null, prevGroup = null
+  for (const r of visible) {
+    const parent = r.path ? String(r.path).split('.').slice(0, -1).join('.') : ''
+    if (r.group_label && !(parent === prevParent && r.group_label === prevGroup)) {
+      treeItems.push({ band: true, key: `band-${r.id}`, level: r.level, label: r.group_label })
+    }
+    treeItems.push({ row: r, key: `row-${r.id}`, parent: isParent(r.path) })
+    prevParent = parent; prevGroup = r.group_label || null
+  }
+  return { treeItems, parentSet, isParent }
+}
+
+const kindStyle = {
+  種目: 'font-bold text-slate-800 dark:text-slate-100 bg-slate-100/70 dark:bg-ink-700/60',
+  共通費: 'font-bold text-slate-700 dark:text-slate-200 bg-amber-50/70 dark:bg-amber-900/20',
+  科目: 'font-semibold text-slate-700 dark:text-slate-200',
+  細目: 'text-slate-700 dark:text-slate-200',
+  別紙: 'text-slate-400 dark:text-slate-400',
+}
+
+// ── BoqTreeView: 当初版と変更後共通のツリー描画コンポーネント ──
+function BoqTreeView({ rows }) {
+  const [expanded, setExpanded] = useState(() => new Set())
+  const toggle = (path) => setExpanded((s) => {
+    const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n
+  })
+  const { treeItems, parentSet } = buildTreeItems(rows, expanded)
+  const expandAll = () => setExpanded(new Set(parentSet))
+  const collapseAll = () => setExpanded(new Set())
+  return (
+    <>
+      <div className="flex items-center justify-end gap-2 text-[11px] text-slate-400 mb-1">
+        <button onClick={expandAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて展開</button>
+        <span>/</span>
+        <button onClick={collapseAll} className="hover:text-slate-600 dark:hover:text-slate-200">折りたたむ</button>
+      </div>
+      <div className="max-h-96 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700/70">
+        {treeItems.map((it) => it.band ? (
+          <div key={it.key} className="px-2 py-1 text-[11px] font-medium text-slate-400 dark:text-slate-500 bg-slate-50/60 dark:bg-ink-700/40"
+            style={{ paddingLeft: `${0.5 + it.level * 1.1}rem` }}>
+            {it.label}
+          </div>
+        ) : (
+          <div key={it.key}
+            className={`flex items-start gap-1.5 px-2 py-1.5 text-xs ${kindStyle[it.row.kind] || ''} ${it.parent ? 'cursor-pointer' : ''}`}
+            style={{ paddingLeft: `${0.5 + it.row.level * 1.1}rem` }}
+            onClick={it.parent ? () => toggle(it.row.path) : undefined}>
+            <span className="w-3.5 shrink-0 pt-0.5">
+              {it.parent ? <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded.has(it.row.path) ? 'rotate-90' : ''}`} /> : null}
+            </span>
+            <span className="flex-1 min-w-0">
+              {it.row.item_name}
+              {it.row.spec ? <span className="text-slate-400"> ／ {it.row.spec}</span> : ''}
+              {it.row.beppi_no && it.row.kind === '細目' ? <span className="ml-1 text-[10px] text-brand-500/80">別紙{it.row.beppi_no}</span> : ''}
+            </span>
+            <span className="w-20 shrink-0 text-right tabular-nums text-slate-500 dark:text-slate-400">
+              {it.row.quantity != null ? `${Number(it.row.quantity).toLocaleString('ja-JP')}${it.row.unit || ''}` : ''}
+            </span>
+            <span className="w-24 shrink-0 text-right tabular-nums">
+              {it.row.amount != null ? fmtYen(it.row.amount) : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
 // ── 数量内訳・構成比率セクション ──
 function BoqSection({ detail, notify, onReload }) {
   const [boq, setBoq] = useState(null)        // { rows, summary, total, imported_at }
@@ -526,6 +612,15 @@ function BoqSection({ detail, notify, onReload }) {
   const [uploading, setUploading] = useState(false)
   const [showItems, setShowItems] = useState(false)
   const [naModal, setNaModal] = useState(null) // NA候補（取込直後の承認用）
+
+  // 版切替: 'original' | change.id (number文字列)
+  const [selectedVersion, setSelectedVersion] = useState('original')
+  // 変更後版データ: { change_id, change_no, boq_mode, base_total, change_total, diff, trades, rows }
+  const [resolvedBoq, setResolvedBoq] = useState(null)
+  const [resolvedLoading, setResolvedLoading] = useState(false)
+
+  // boq_imported_at が入っている設計変更だけを版選択肢に出す
+  const dcVersions = (detail.design_changes || []).filter((dc) => dc.boq_imported_at != null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -536,6 +631,17 @@ function BoqSection({ detail, notify, onReload }) {
   }, [detail.id])
 
   useEffect(() => { load() }, [load])
+
+  // 版切替時に変更後データを取得
+  useEffect(() => {
+    if (selectedVersion === 'original') { setResolvedBoq(null); return }
+    const changeId = selectedVersion
+    setResolvedLoading(true)
+    axios.get(`${apiUrl}/api/construction/projects/${detail.id}/boq-resolved?change_id=${changeId}`, authConfig())
+      .then(({ data }) => setResolvedBoq(data))
+      .catch(() => notify('変更後数量書の取得に失敗しました', 'error'))
+      .finally(() => setResolvedLoading(false))
+  }, [selectedVersion, detail.id, notify])
 
   const onUpload = async (e) => {
     const file = e.target.files?.[0]
@@ -563,54 +669,17 @@ function BoqSection({ detail, notify, onReload }) {
   const summary = boq?.summary || []
   const maxRatio = summary.reduce((m, t) => Math.max(m, t.ratio || 0), 0) || 1
 
-  // ── 階層ツリー（種目→科目→細目→別紙）の表示制御 ──
+  // ── 当初版ツリー用 ──
   const rows = boq?.rows || []
-  const [expanded, setExpanded] = useState(() => new Set()) // 既定は全折りたたみ（上位のみ表示）
-  const toggle = (path) => setExpanded((s) => {
-    const n = new Set(s); n.has(path) ? n.delete(path) : n.add(path); return n
-  })
-  // 親（子を持つ path）の集合
-  const parentSet = new Set()
-  for (const r of rows) {
-    if (!r.path) continue
-    const parts = String(r.path).split('.')
-    if (parts.length > 1) parentSet.add(parts.slice(0, -1).join('.'))
-  }
-  const isParent = (p) => p != null && parentSet.has(p)
-  // 折りたたみを反映した可視ノード列
-  const visible = []
-  let hidePrefix = null
-  for (const r of rows) {
-    if (hidePrefix && r.path && String(r.path).startsWith(hidePrefix)) continue
-    hidePrefix = null
-    visible.push(r)
-    if (isParent(r.path) && !expanded.has(r.path)) hidePrefix = r.path + '.'
-  }
-  // 小見出し帯（<撤去> や (地区名)）の差し込み位置を計算
-  const treeItems = []
-  let prevParent = null, prevGroup = null
-  for (const r of visible) {
-    const parent = r.path ? String(r.path).split('.').slice(0, -1).join('.') : ''
-    if (r.group_label && !(parent === prevParent && r.group_label === prevGroup)) {
-      treeItems.push({ band: true, key: `band-${r.id}`, level: r.level, label: r.group_label })
-    }
-    treeItems.push({ row: r, key: `row-${r.id}`, parent: isParent(r.path) })
-    prevParent = parent; prevGroup = r.group_label || null
-  }
   const nTane = rows.filter((r) => r.kind === '種目').length
   const nKamoku = rows.filter((r) => r.kind === '科目').length
   const nSaimoku = rows.filter((r) => r.kind === '細目').length
   const nBeppi = rows.filter((r) => r.kind === '別紙').length
-  const expandAll = () => setExpanded(new Set(parentSet))
-  const collapseAll = () => setExpanded(new Set())
 
-  const kindStyle = {
-    種目: 'font-bold text-slate-800 dark:text-slate-100 bg-slate-100/70 dark:bg-ink-700/60',
-    共通費: 'font-bold text-slate-700 dark:text-slate-200 bg-amber-50/70 dark:bg-amber-900/20',
-    科目: 'font-semibold text-slate-700 dark:text-slate-200',
-    細目: 'text-slate-700 dark:text-slate-200',
-    別紙: 'text-slate-400 dark:text-slate-400',
-  }
+  // 変更後版: 工種別表示用
+  const resolvedTrades = resolvedBoq?.trades || []
+  const resolvedMaxRatio = resolvedTrades.reduce((m, t) => Math.max(m, t.ratio || 0), 0) || 1
+  const isDelta = resolvedBoq?.boq_mode === 'delta'
 
   return (
     <Card className="px-4 py-3 mb-4">
@@ -618,21 +687,43 @@ function BoqSection({ detail, notify, onReload }) {
         <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
           <BarChart3 className="w-4 h-4 text-brand-500" /> 数量内訳・構成比率
         </span>
-        <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1"
-          title="数量書(内訳書 .xlsx)を取込み、工事内容・数量・金額を保存して工種別の構成比率を算出します">
-          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
-          {boq?.imported_at ? '数量書を再取込' : '数量書(xlsx)を取込'}
-          <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onUpload} disabled={uploading} />
-        </label>
+        <div className="flex items-center gap-2">
+          {/* 版切替セレクタ */}
+          {(boq?.imported_at || dcVersions.length > 0) && (
+            <select
+              className="text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200"
+              value={selectedVersion}
+              onChange={(e) => { setSelectedVersion(e.target.value); setShowItems(false) }}>
+              <option value="original">当初版</option>
+              {dcVersions.map((dc) => (
+                <option key={dc.id} value={String(dc.id)}>
+                  第{dc.change_no}回変更後
+                </option>
+              ))}
+            </select>
+          )}
+          {/* 当初版のみ取込ボタン表示 */}
+          {selectedVersion === 'original' && (
+            <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1"
+              title="数量書(内訳書 .xlsx)を取込み、工事内容・数量・金額を保存して工種別の構成比率を算出します">
+              {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+              {boq?.imported_at ? '数量書を再取込' : '数量書(xlsx)を取込'}
+              <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onUpload} disabled={uploading} />
+            </label>
+          )}
+        </div>
       </div>
 
-      {loading ? (
+      {/* ── 当初版表示 ── */}
+      {selectedVersion === 'original' && loading && (
         <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
-      ) : !boq?.imported_at ? (
+      )}
+      {selectedVersion === 'original' && !loading && !boq?.imported_at && (
         <p className="text-xs text-slate-400 py-2">
           数量書(内訳書)を取込むと、工種別の構成比率を算出し、数量書に無い工種の施工計画書などをチェックリストから対象外にできます。
         </p>
-      ) : (
+      )}
+      {selectedVersion === 'original' && !loading && boq?.imported_at && (
         <>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mb-3">
             <span>直接工事費 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boq.total)}</span></span>
@@ -657,49 +748,130 @@ function BoqSection({ detail, notify, onReload }) {
           </div>
 
           {/* 内訳ツリー（種目→科目→細目→別紙：Excel の表記・順序のまま）*/}
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-3">
             <button onClick={() => setShowItems((s) => !s)}
               className="text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
               <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showItems ? 'rotate-180' : ''}`} />
               内訳を{showItems ? '隠す' : '表示'}
             </button>
-            {showItems && (
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <button onClick={expandAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて展開</button>
-                <span>/</span>
-                <button onClick={collapseAll} className="hover:text-slate-600 dark:hover:text-slate-200">折りたたむ</button>
-              </div>
-            )}
           </div>
           {showItems && (
-            <div className="mt-2 max-h-96 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700/70">
-              {treeItems.map((it) => it.band ? (
-                <div key={it.key} className="px-2 py-1 text-[11px] font-medium text-slate-400 dark:text-slate-500 bg-slate-50/60 dark:bg-ink-700/40"
-                  style={{ paddingLeft: `${0.5 + it.level * 1.1}rem` }}>
-                  {it.label}
-                </div>
-              ) : (
-                <div key={it.key}
-                  className={`flex items-start gap-1.5 px-2 py-1.5 text-xs ${kindStyle[it.row.kind] || ''} ${it.parent ? 'cursor-pointer' : ''}`}
-                  style={{ paddingLeft: `${0.5 + it.row.level * 1.1}rem` }}
-                  onClick={it.parent ? () => toggle(it.row.path) : undefined}>
-                  <span className="w-3.5 shrink-0 pt-0.5">
-                    {it.parent ? <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded.has(it.row.path) ? 'rotate-90' : ''}`} /> : null}
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    {it.row.item_name}
-                    {it.row.spec ? <span className="text-slate-400"> ／ {it.row.spec}</span> : ''}
-                    {it.row.beppi_no && it.row.kind === '細目' ? <span className="ml-1 text-[10px] text-brand-500/80">別紙{it.row.beppi_no}</span> : ''}
-                  </span>
-                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-500 dark:text-slate-400">
-                    {it.row.quantity != null ? `${Number(it.row.quantity).toLocaleString('ja-JP')}${it.row.unit || ''}` : ''}
-                  </span>
-                  <span className="w-24 shrink-0 text-right tabular-nums">
-                    {it.row.amount != null ? fmtYen(it.row.amount) : ''}
-                  </span>
-                </div>
-              ))}
+            <div className="mt-2">
+              <BoqTreeView rows={rows} />
             </div>
+          )}
+        </>
+      )}
+
+      {/* ── 変更後版表示（ローディング）── */}
+      {selectedVersion !== 'original' && resolvedLoading && (
+        <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
+      )}
+
+      {/* ── 変更後版表示（データあり）── */}
+      {selectedVersion !== 'original' && !resolvedLoading && resolvedBoq && (
+        <>
+          {/* 合計サマリ */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400 mb-3">
+            <span>直接工事費（変更後）
+              <span className="ml-1 font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(resolvedBoq.change_total)}</span>
+            </span>
+            <span className="flex items-center gap-1">
+              当初比 <AmountDiff before={resolvedBoq.base_total} after={resolvedBoq.change_total} />
+            </span>
+            {isDelta && (
+              <span className="text-amber-600 dark:text-amber-400 font-semibold">変更分のみ(delta)モード</span>
+            )}
+            <span className="text-[11px]">取込 {fmtDate(resolvedBoq.boq_imported_at || null)}</span>
+          </div>
+
+          {/* 工種別構成比率（変更後・増減マーク付き） */}
+          <div className="space-y-1.5 mb-3">
+            {resolvedTrades.map((t) => {
+              const isInc = t.diff > 0
+              const barColor = t.changed
+                ? (isInc ? 'bg-warning-500/80' : 'bg-success-500/80')
+                : 'bg-brand-500/80'
+              return (
+                <div key={t.trade} className="flex items-center gap-2">
+                  <span className="w-28 shrink-0 text-xs text-slate-600 dark:text-slate-300 truncate flex items-center gap-1" title={t.trade}>
+                    {t.changed && (
+                      <span className={`text-[10px] font-bold ${isInc ? 'text-warning-600 dark:text-warning-400' : 'text-success-600 dark:text-success-400'}`}>
+                        {isInc ? '▲' : '▼'}
+                      </span>
+                    )}
+                    {t.trade}
+                  </span>
+                  <div className="flex-1 h-4 rounded bg-slate-100 dark:bg-ink-700 overflow-hidden">
+                    <div className={`h-full ${barColor} rounded`} style={{ width: `${((t.ratio || 0) / resolvedMaxRatio) * 100}%` }} />
+                  </div>
+                  <span className="w-14 shrink-0 text-right text-xs font-semibold text-slate-700 dark:text-slate-200 tabular-nums">
+                    {fmtPct(t.ratio)}
+                  </span>
+                  <span className="w-24 shrink-0 text-right text-[11px] text-slate-400 tabular-nums">{fmtYen(t.after_amount)}</span>
+                  {t.changed && (
+                    <span className="w-20 shrink-0 text-right">
+                      <AmountDiff before={t.base_amount} after={t.after_amount} />
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* 内訳ツリー */}
+          {resolvedBoq.rows && resolvedBoq.rows.length > 0 && (
+            <>
+              <div className="mt-3">
+                <button onClick={() => setShowItems((s) => !s)}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showItems ? 'rotate-180' : ''}`} />
+                  内訳を{showItems ? '隠す' : '表示'}
+                </button>
+              </div>
+              {showItems && (
+                <>
+                  {/* full版: 通常ツリー */}
+                  {!isDelta && (
+                    <div className="mt-2">
+                      <BoqTreeView rows={resolvedBoq.rows} />
+                    </div>
+                  )}
+                  {/* delta版: 当初ツリー + 増減明細 */}
+                  {isDelta && (
+                    <div className="mt-2 space-y-4">
+                      {rows.length > 0 && (
+                        <div>
+                          <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">当初（据え置き）</p>
+                          <BoqTreeView rows={rows} />
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-[11px] font-semibold text-warning-600 dark:text-warning-400 mb-1">
+                          第{resolvedBoq.change_no}回 変更分（増減）
+                        </p>
+                        <div className="max-h-64 overflow-y-auto rounded-xl border border-warning-200 dark:border-warning-500/30 divide-y divide-slate-100 dark:divide-ink-700/70">
+                          {resolvedBoq.rows.map((r, i) => (
+                            <div key={i} className={`flex items-start gap-1.5 px-3 py-1.5 text-xs ${kindStyle[r.kind] || ''}`}>
+                              <span className="flex-1 min-w-0">
+                                {r.item_name}
+                                {r.spec ? <span className="text-slate-400"> ／ {r.spec}</span> : ''}
+                              </span>
+                              <span className="w-20 shrink-0 text-right tabular-nums text-slate-500 dark:text-slate-400">
+                                {r.quantity != null ? `${Number(r.quantity).toLocaleString('ja-JP')}${r.unit || ''}` : ''}
+                              </span>
+                              <span className="w-24 shrink-0 text-right tabular-nums">
+                                {r.amount != null ? fmtYen(r.amount) : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
           )}
         </>
       )}
@@ -1851,12 +2023,16 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
 function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDetail, notify }) {
   const [files, setFiles] = useState([])
   const [loadingFiles, setLoadingFiles] = useState(true)
-  const [uploading, setUploading] = useState(false)
-  const [docType, setDocType] = useState(DC_DOC_TYPES[0])
   const [boqUploading, setBoqUploading] = useState(false)
   const [boqCompare, setBoqCompare] = useState(null)
   const [boqLoading, setBoqLoading] = useState(false)
   const [showBoq, setShowBoq] = useState(false)
+  // 変更後数量書取込モード
+  const [boqMode, setBoqMode] = useState('full') // 'full' | 'delta'
+
+  // 複数ファイル追加ステージ: [{ file, doc_type }]
+  const [stagedFiles, setStagedFiles] = useState([])
+  const [batchUploading, setBatchUploading] = useState(false)
 
   const loadFiles = useCallback(async () => {
     setLoadingFiles(true)
@@ -1869,23 +2045,37 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
-  const onUploadFile = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setUploading(true)
+  // 複数ファイル選択 → ステージに追加
+  const onSelectFiles = (e) => {
+    const selected = Array.from(e.target.files || [])
+    if (!selected.length) return
+    setStagedFiles((prev) => [
+      ...prev,
+      ...selected.map((file) => ({ file, doc_type: DC_DOC_TYPES[0] })),
+    ])
+    e.target.value = ''
+  }
+
+  // まとめてアップロード
+  const onBatchUpload = async () => {
+    if (!stagedFiles.length) return
+    setBatchUploading(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('doc_type', docType)
       const token = localStorage.getItem('authToken')
-      await axios.post(
-        `${apiUrl}/api/construction/design-changes/${change.id}/files`, fd,
-        { headers: { Authorization: `Bearer ${token}` } })
-      notify('ファイルをアップロードしました')
+      for (const meta of stagedFiles) {
+        const fd = new FormData()
+        fd.append('file', meta.file)
+        fd.append('doc_type', meta.doc_type)
+        await axios.post(
+          `${apiUrl}/api/construction/design-changes/${change.id}/files`, fd,
+          { headers: { Authorization: `Bearer ${token}` } })
+      }
+      notify(`${stagedFiles.length} 件のファイルをアップロードしました`)
+      setStagedFiles([])
       await loadFiles()
     } catch (err) {
       notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
-    } finally { setUploading(false); e.target.value = '' }
+    } finally { setBatchUploading(false) }
   }
 
   const onDeleteFile = async (fileId) => {
@@ -1898,7 +2088,7 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
     }
   }
 
-  // 変更後数量書(xlsx)取込
+  // 変更後数量書(xlsx)取込 — boq_mode を付けて送信
   const onBoqUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -1907,18 +2097,23 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
       const fd = new FormData()
       fd.append('file', file)
       fd.append('change_id', change.id)
+      fd.append('boq_mode', boqMode)
       const token = localStorage.getItem('authToken')
       const { data } = await axios.post(
         `${apiUrl}/api/construction/projects/${detail.id}/import-boq`, fd,
         { headers: { Authorization: `Bearer ${token}` } })
-      notify(`変更後数量書を取込みました（明細 ${data.line_count} 件・総額 ${fmtYen(data.total)}）`)
+      const modeLabel = (data.mode || boqMode) === 'delta' ? '変更分のみ' : '全体版'
+      notify(`変更後数量書を取込みました（${modeLabel}・明細 ${data.line_count} 件・総額 ${fmtYen(data.total)}）`)
+      notify(`数量内訳・構成比率の「第${change.change_no}回変更後」で確認できます`)
+      // 詳細再取得（design_changes.boq_imported_at を更新して版セレクタに反映）
       await onReload()
+      if (onReloadDetail) await onReloadDetail()
     } catch (err) {
       notify(err.response?.data?.error || '数量書の取込に失敗しました', 'error')
     } finally { setBoqUploading(false); e.target.value = '' }
   }
 
-  // BOQ比較取得
+  // BOQ比較取得（旧 boq-compare エンドポイント）
   const loadBoqCompare = async () => {
     setBoqLoading(true)
     setShowBoq(true)
@@ -1934,23 +2129,58 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 
   return (
     <ModalShell title={`第${change.change_no}回変更 — 関連書類`} onClose={onClose} wide>
-      {/* ファイルアップロード */}
-      <div className="flex items-end gap-2 mb-3">
-        <div className="flex-1">
-          <Field label="書類種別">
-            <select className={inputCls} value={docType} onChange={(e) => setDocType(e.target.value)}>
-              {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
-            </select>
-          </Field>
-        </div>
-        <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1 px-3 py-2 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10">
-          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-          アップロード
-          <input type="file" className="hidden" onChange={onUploadFile} disabled={uploading} />
+
+      {/* ── 書類追加エリア ── */}
+      <div className="mb-4 rounded-xl border border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-700/30 px-4 py-3">
+        <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 mb-0.5 flex items-center gap-1">
+          <Plus className="w-3.5 h-3.5 text-brand-500" /> 書類を追加
+        </p>
+        <p className="text-[11px] text-slate-400 mb-3">
+          変更指示書・契約書・図面などをまとめて追加できます。ファイルを選んで種別を確認してから「まとめてアップロード」してください。
+        </p>
+
+        {/* ファイル選択ボタン */}
+        <label className={`inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer px-3 py-1.5 rounded-xl border transition-colors
+          border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-100 dark:hover:bg-brand-500/20`}>
+          <Upload className="w-3.5 h-3.5" />
+          ファイルを選択（複数可）
+          <input type="file" multiple className="hidden" onChange={onSelectFiles} disabled={batchUploading} />
         </label>
+
+        {/* ステージ一覧 */}
+        {stagedFiles.length > 0 && (
+          <div className="mt-3 space-y-2">
+            <ul className="space-y-2">
+              {stagedFiles.map((meta, i) => (
+                <li key={i} className="flex items-center gap-2">
+                  <span className="text-xs text-slate-600 dark:text-slate-300 truncate flex-1 min-w-0">{meta.file.name}</span>
+                  <select
+                    className={`${inputCls} w-40 shrink-0`}
+                    value={meta.doc_type}
+                    onChange={(e) => setStagedFiles((prev) => prev.map((m, idx) => idx === i ? { ...m, doc_type: e.target.value } : m))}>
+                    {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
+                  </select>
+                  <button
+                    onClick={() => setStagedFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="text-slate-400 hover:text-danger-500 shrink-0" title="この添付を取り消す">
+                    <X className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-[11px] text-slate-400">{stagedFiles.length} 件を追加待ち</span>
+              <Button onClick={onBatchUpload} disabled={batchUploading}>
+                {batchUploading
+                  ? <><Loader2 className="w-4 h-4 animate-spin mr-1" />アップロード中...</>
+                  : <><Upload className="w-4 h-4 mr-1" />まとめてアップロード</>}
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ファイル一覧 */}
+      {/* ── 既存ファイル一覧 ── */}
       {loadingFiles ? (
         <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
       ) : files.length === 0 ? (
@@ -1976,25 +2206,44 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
         </ul>
       )}
 
-      {/* 変更後数量書取込 + BOQ比較 */}
+      {/* ── 変更後数量書取込 ── */}
       <div className="pt-4 border-t border-slate-100 dark:border-ink-700">
-        <div className="flex items-center justify-between gap-3 mb-2">
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1">
-            <FileSpreadsheet className="w-4 h-4 text-brand-500" /> 変更後数量書
-          </span>
-          <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div>
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1">
+              <FileSpreadsheet className="w-4 h-4 text-brand-500" /> 変更後数量書（xlsx）取込
+            </span>
+            <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+              取込後は「数量内訳・構成比率」の版切替で確認できます。
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* 取込モードセレクト */}
+            <select
+              className="text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200"
+              value={boqMode}
+              onChange={(e) => setBoqMode(e.target.value)}>
+              <option value="full">全体版</option>
+              <option value="delta">変更分のみ</option>
+            </select>
             <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
               {boqUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-              変更後数量書(xlsx)を取込
+              取込
               <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onBoqUpload} disabled={boqUploading} />
             </label>
             <button onClick={loadBoqCompare} disabled={boqLoading}
               className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 disabled:opacity-50">
               {boqLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5" />}
-              当初との比較表示
+              当初との比較
             </button>
           </div>
         </div>
+        {/* モード説明 */}
+        <p className="text-[11px] text-slate-400 mb-2">
+          {boqMode === 'delta'
+            ? '変更分のみ＝増減があった項目だけの数量書。当初の数量書に加算して変更後を算出します。'
+            : '全体版＝変更後の全明細が入った数量書。当初と全て置き換えます。'}
+        </p>
 
         {showBoq && (
           boqLoading ? (
