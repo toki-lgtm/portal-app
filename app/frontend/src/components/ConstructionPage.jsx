@@ -4,7 +4,7 @@ import {
   ArrowLeft, Plus, X, Save, Search, Loader2, Building2, ListChecks,
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
   Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
-  BarChart3, FileSpreadsheet, ChevronDown,
+  BarChart3, FileSpreadsheet, ChevronDown, GitBranch, CheckCircle2, RefreshCw,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -49,6 +49,20 @@ const CATEGORIES = [
 
 const CONSTRUCTION_TYPES = ['建築', '土木', '電気', '機械', 'その他']
 const WORK_CATEGORIES = ['新設', '改修', 'その他']
+
+// 設計変更ステータス
+const DC_STATUS = [
+  { key: 'negotiating', label: '協議中', tone: 'neutral' },
+  { key: 'instructed', label: '指示受領', tone: 'info' },
+  { key: 'estimating', label: '見積中', tone: 'warning' },
+  { key: 'contracted', label: '変更契約済', tone: 'success' },
+  { key: 'cancelled', label: '中止', tone: 'danger' },
+]
+const DC_STATUS_MAP = Object.fromEntries(DC_STATUS.map((s) => [s.key, s]))
+
+const DC_REASON_CATEGORIES = ['数量増減', '設計変更指示', '追加工事', '工法変更', '条件変更', 'その他']
+
+const DC_DOC_TYPES = ['変更指示書', '変更見積書', '変更契約書', '変更設計図', '変更数量書', 'その他']
 
 function authConfig() {
   const token = localStorage.getItem('authToken')
@@ -450,6 +464,8 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
       </Card>
 
       <BoqSection detail={detail} notify={notify} onReload={onReload} />
+
+      <DesignChangeSection detail={detail} notify={notify} onReload={onReload} />
 
       <div className="flex items-center justify-between mb-2 gap-3">
         <h2 className="text-sm font-bold text-slate-700 dark:text-slate-200">提出書類チェックリスト</h2>
@@ -1050,6 +1066,866 @@ function AddDocModal({ projectId, onClose, onAdded, onError }) {
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
         <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />追加</>}</Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── 設計変更（変更契約）セクション ──────────────────────────────
+// ════════════════════════════════════════════════════════════════
+
+function DcStatusBadge({ status }) {
+  const def = DC_STATUS_MAP[status] || { label: status, tone: 'neutral' }
+  return <Badge tone={def.tone}>{def.label}</Badge>
+}
+
+// 金額差分の表示ヘルパー（増減を色付きで）
+function AmountDiff({ before, after }) {
+  if (before == null || after == null) return <span className="text-slate-400">—</span>
+  const diff = after - before
+  const sign = diff >= 0 ? '+' : ''
+  const cls = diff > 0 ? 'text-danger-600 dark:text-danger-400'
+    : diff < 0 ? 'text-success-600 dark:text-success-400'
+      : 'text-slate-400'
+  return (
+    <span className={`tabular-nums text-xs ${cls}`}>
+      {sign}{fmtYen(diff)}
+    </span>
+  )
+}
+
+// 日付差分の表示ヘルパー（増減日数）
+function DateDiff({ before, after }) {
+  if (!before || !after) return <span className="text-slate-400">—</span>
+  const diffMs = new Date(after) - new Date(before)
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24))
+  if (days === 0) return <span className="text-slate-400">増減なし</span>
+  const sign = days > 0 ? '+' : ''
+  const cls = days > 0 ? 'text-warning-600 dark:text-warning-400' : 'text-success-600 dark:text-success-400'
+  return <span className={`tabular-nums text-xs ${cls}`}>{sign}{days}日</span>
+}
+
+// ── 設計変更 メインセクション ──
+function DesignChangeSection({ detail, notify, onReload }) {
+  const [changes, setChanges] = useState(detail.design_changes || [])
+  const [loading, setLoading] = useState(false)
+  const [showNew, setShowNew] = useState(false)
+  const [editTarget, setEditTarget] = useState(null)
+  const [filesTarget, setFilesTarget] = useState(null)  // { change, mode: 'files' | 'boq' }
+  const [applyingId, setApplyingId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  // 書類読込→AI抽出
+  const [extractBusy, setExtractBusy] = useState(false)
+  const [draftData, setDraftData] = useState(null)     // { draft, confidence, summary }
+  const [extractedFiles, setExtractedFiles] = useState([]) // File[]
+
+  // 詳細取得後にdesign_changesが変わったら同期
+  useEffect(() => {
+    setChanges(detail.design_changes || [])
+  }, [detail.design_changes])
+
+  // 一覧を単独取得（保存・削除後）
+  const loadChanges = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/construction/projects/${detail.id}/design-changes`, authConfig())
+      setChanges(data || [])
+    } catch (e) {
+      notify(e.response?.data?.error || '設計変更の読み込みに失敗しました', 'error')
+    } finally { setLoading(false) }
+  }, [detail.id, notify])
+
+  const handleApply = async (change) => {
+    const ok = window.confirm(
+      `第${change.change_no}回変更（${change.title}）を工事基本情報へ反映します。\n` +
+      '契約金額・工期末・完成検査日が更新されます。よろしいですか？'
+    )
+    if (!ok) return
+    setApplyingId(change.id)
+    try {
+      await axios.post(`${apiUrl}/api/construction/design-changes/${change.id}/apply`, {}, authConfig())
+      notify(`第${change.change_no}回変更を反映しました`)
+      await onReload()
+      await loadChanges()
+    } catch (e) {
+      notify(e.response?.data?.error || '反映に失敗しました', 'error')
+    } finally { setApplyingId(null) }
+  }
+
+  const handleDelete = async (change) => {
+    const ok = window.confirm(`第${change.change_no}回変更「${change.title}」を削除します。よろしいですか？`)
+    if (!ok) return
+    setDeletingId(change.id)
+    try {
+      await axios.delete(`${apiUrl}/api/construction/design-changes/${change.id}`, authConfig())
+      notify('設計変更を削除しました')
+      await loadChanges()
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    } finally { setDeletingId(null) }
+  }
+
+  // 書類読込ハンドラ（ファイル選択 → extract API → モーダルをプリフィルして開く）
+  const onExtractFiles = async (e) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setExtractBusy(true)
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/design-changes/extract`, fd,
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      setDraftData(data)
+      setExtractedFiles(Array.from(files))
+      setShowNew(true)
+    } catch (err) {
+      notify(err.response?.data?.error || '書類の読み取りに失敗しました', 'error')
+    } finally {
+      setExtractBusy(false)
+      e.target.value = ''
+    }
+  }
+
+  const hasOriginal = detail.original_contract_amount != null || detail.original_end_date != null
+  const changeCount = detail.change_count ?? changes.length
+
+  return (
+    <Card className="px-4 py-3 mb-4">
+      {/* ヘッダ */}
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+          <GitBranch className="w-4 h-4 text-brand-500" /> 設計変更（変更契約）
+          {changeCount > 0 && (
+            <span className="ml-1 text-[11px] font-bold bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300 rounded-full px-1.5 py-0.5">
+              {changeCount}回
+            </span>
+          )}
+        </span>
+        {/* ボタン群：主導線（書類読込）＋サブ（空フォーム追加） */}
+        <div className="flex items-center gap-2">
+          <label className={`text-xs font-semibold cursor-pointer flex items-center gap-1 px-3 py-1.5 rounded-xl border transition-colors
+            ${extractBusy
+              ? 'opacity-60 cursor-not-allowed border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400'
+              : 'border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 hover:bg-brand-100 dark:hover:bg-brand-500/20'}`}>
+            {extractBusy
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Sparkles className="w-3.5 h-3.5" />}
+            書類を読み込んで設計変更を追加
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              className="hidden"
+              onChange={onExtractFiles}
+              disabled={extractBusy}
+            />
+          </label>
+          <button
+            onClick={() => { setDraftData(null); setExtractedFiles([]); setShowNew(true) }}
+            className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:underline flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" /> 手入力で追加
+          </button>
+        </div>
+      </div>
+
+      {/* 対比サマリカード */}
+      {!hasOriginal ? (
+        <p className="text-xs text-slate-400 py-1 mb-3">設計変更なし（変更を追加すると当初値が自動保存されます）</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          {/* 契約金額対比 */}
+          <div className="rounded-xl border border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-700/40 px-3 py-2.5">
+            <div className="text-[11px] text-slate-400 mb-1">契約金額</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+              当初 <span className="font-semibold text-slate-700 dark:text-slate-200">{fmtYen(detail.original_contract_amount)}</span>
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 tabular-nums mt-0.5">
+              現在 <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtYen(detail.contract_amount)}</span>
+            </div>
+            {detail.original_contract_amount != null && detail.contract_amount != null && (
+              <div className="mt-1 flex items-center gap-1 text-xs">
+                <AmountDiff before={detail.original_contract_amount} after={detail.contract_amount} />
+                {detail.original_contract_amount !== 0 && (
+                  <span className="text-slate-400">
+                    （{detail.contract_amount >= detail.original_contract_amount ? '+' : ''}
+                    {(((detail.contract_amount - detail.original_contract_amount) / detail.original_contract_amount) * 100).toFixed(1)}%）
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {/* 工期末対比 */}
+          <div className="rounded-xl border border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-700/40 px-3 py-2.5">
+            <div className="text-[11px] text-slate-400 mb-1">工期末</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              当初 <span className="font-semibold text-slate-700 dark:text-slate-200">{fmtDate(detail.original_end_date)}</span>
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              現在 <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtDate(detail.end_date)}</span>
+            </div>
+            {detail.original_end_date && detail.end_date && (
+              <div className="mt-1">
+                <DateDiff before={detail.original_end_date} after={detail.end_date} />
+              </div>
+            )}
+          </div>
+          {/* 完成検査日対比 */}
+          <div className="rounded-xl border border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-700/40 px-3 py-2.5">
+            <div className="text-[11px] text-slate-400 mb-1">完成検査日</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              当初 <span className="font-semibold text-slate-700 dark:text-slate-200">{fmtDate(detail.original_completion_inspection_date)}</span>
+            </div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              現在 <span className="font-semibold text-slate-800 dark:text-slate-100">{fmtDate(detail.completion_inspection_date)}</span>
+            </div>
+            {detail.original_completion_inspection_date && detail.completion_inspection_date && (
+              <div className="mt-1">
+                <DateDiff before={detail.original_completion_inspection_date} after={detail.completion_inspection_date} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 変更履歴テーブル */}
+      {loading ? (
+        <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
+      ) : changes.length === 0 ? (
+        <p className="text-xs text-slate-400 py-2">設計変更の記録はまだありません。</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-100 dark:border-ink-700">
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">回</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">ステータス</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">変更指示日</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">変更契約日</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">金額（前→後）</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">工期末（前→後）</th>
+                <th className="text-left py-1.5 pr-3 text-slate-500 font-semibold whitespace-nowrap">理由区分</th>
+                <th className="text-left py-1.5 text-slate-500 font-semibold whitespace-nowrap">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-ink-700/60">
+              {changes.map((ch) => (
+                <tr key={ch.id} className="hover:bg-slate-50 dark:hover:bg-ink-700/30">
+                  <td className="py-2 pr-3 font-bold text-slate-800 dark:text-slate-100 whitespace-nowrap">
+                    第{ch.change_no}回
+                    {ch.applied && (
+                      <span title="基本情報に反映済" className="ml-1 inline-flex items-center">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-success-500" />
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 whitespace-nowrap"><DcStatusBadge status={ch.status} /></td>
+                  <td className="py-2 pr-3 whitespace-nowrap text-slate-600 dark:text-slate-300 tabular-nums">{fmtDate(ch.instruction_date)}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap text-slate-600 dark:text-slate-300 tabular-nums">{fmtDate(ch.agreement_date)}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap">
+                    <div className="text-slate-500 dark:text-slate-400 tabular-nums">
+                      {fmtYen(ch.amount_before)} → {fmtYen(ch.amount_after)}
+                    </div>
+                    <AmountDiff before={ch.amount_before} after={ch.amount_after} />
+                  </td>
+                  <td className="py-2 pr-3 whitespace-nowrap">
+                    <div className="text-slate-500 dark:text-slate-400">
+                      {fmtDate(ch.end_date_before)} → {fmtDate(ch.end_date_after)}
+                    </div>
+                    <DateDiff before={ch.end_date_before} after={ch.end_date_after} />
+                  </td>
+                  <td className="py-2 pr-3 text-slate-600 dark:text-slate-300">{ch.reason_category || '—'}</td>
+                  <td className="py-2 whitespace-nowrap">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setEditTarget(ch)}
+                        className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700 flex items-center gap-0.5">
+                        <Pencil className="w-3.5 h-3.5" /> 編集
+                      </button>
+                      {!ch.applied && (
+                        <button
+                          onClick={() => handleApply(ch)}
+                          disabled={applyingId === ch.id}
+                          className="px-2 py-1 rounded-lg text-xs font-semibold text-brand-600 dark:text-brand-400 hover:bg-brand-50 dark:hover:bg-brand-500/10 flex items-center gap-0.5 disabled:opacity-50">
+                          {applyingId === ch.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                          反映
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setFilesTarget(ch)}
+                        className="px-2 py-1 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700 flex items-center gap-0.5">
+                        <Paperclip className="w-3.5 h-3.5" /> 書類
+                      </button>
+                      <button
+                        onClick={() => handleDelete(ch)}
+                        disabled={deletingId === ch.id}
+                        className="px-2 py-1 rounded-lg text-xs font-semibold text-danger-600 dark:text-danger-400 hover:bg-danger-50 dark:hover:bg-danger-500/10 flex items-center gap-0.5 disabled:opacity-50">
+                        {deletingId === ch.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        削除
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* モーダル群 */}
+      {showNew && (
+        <NewDesignChangeModal
+          detail={detail}
+          draft={draftData?.draft || null}
+          confidence={draftData?.confidence ?? null}
+          summary={draftData?.summary || null}
+          extractedFiles={extractedFiles}
+          onClose={() => { setShowNew(false); setDraftData(null); setExtractedFiles([]) }}
+          onSaved={async () => {
+            setShowNew(false); setDraftData(null); setExtractedFiles([])
+            notify('設計変更を登録しました')
+            await Promise.all([loadChanges(), onReload()])
+          }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+      {editTarget && (
+        <EditDesignChangeModal
+          change={editTarget}
+          detail={detail}
+          onClose={() => setEditTarget(null)}
+          onSaved={async () => { setEditTarget(null); notify('設計変更を更新しました'); await loadChanges() }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+      {filesTarget && (
+        <DesignChangeFilesModal
+          change={filesTarget}
+          detail={detail}
+          onClose={() => setFilesTarget(null)}
+          onReload={loadChanges}
+          onReloadDetail={onReload}
+          notify={notify}
+        />
+      )}
+    </Card>
+  )
+}
+
+// ── 設計変更フォームの共通フィールド群 ──
+function DcFormFields({ f, set, currentDetail }) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <Field label="理由区分 *">
+        <select className={inputCls} value={f.reason_category} onChange={set('reason_category')}>
+          <option value="">選択してください</option>
+          {DC_REASON_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+        </select>
+      </Field>
+      <Field label="ステータス">
+        <select className={inputCls} value={f.status} onChange={set('status')}>
+          {DC_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+      </Field>
+      <div className="md:col-span-2">
+        <Field label="変更タイトル *">
+          <input className={inputCls} value={f.title} onChange={set('title')} placeholder="第○回設計変更 等" />
+        </Field>
+      </div>
+      <Field label="変更後契約金額（円）">
+        <div className="relative">
+          <input className={inputCls} type="number" value={f.amount_after} onChange={set('amount_after')} />
+          {currentDetail?.contract_amount != null && (
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              現在 {fmtYen(currentDetail.contract_amount)}
+            </p>
+          )}
+        </div>
+      </Field>
+      <Field label="変更後工期末">
+        <input className={inputCls} type="date" value={f.end_date_after} onChange={set('end_date_after')} />
+        {currentDetail?.end_date && (
+          <p className="text-[11px] text-slate-400 mt-0.5">現在 {fmtDate(currentDetail.end_date)}</p>
+        )}
+      </Field>
+      <Field label="変更後完成検査日">
+        <input className={inputCls} type="date" value={f.completion_inspection_date_after} onChange={set('completion_inspection_date_after')} />
+        {currentDetail?.completion_inspection_date && (
+          <p className="text-[11px] text-slate-400 mt-0.5">現在 {fmtDate(currentDetail.completion_inspection_date)}</p>
+        )}
+      </Field>
+      <Field label="変更指示日">
+        <input className={inputCls} type="date" value={f.instruction_date} onChange={set('instruction_date')} />
+      </Field>
+      <Field label="変更契約日">
+        <input className={inputCls} type="date" value={f.agreement_date} onChange={set('agreement_date')} />
+      </Field>
+      <div className="md:col-span-2">
+        <Field label="変更内容・理由">
+          <textarea className={inputCls} rows={3} value={f.reason} onChange={set('reason')} placeholder="変更の詳細・根拠を記載" />
+        </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="備考">
+          <textarea className={inputCls} rows={2} value={f.note} onChange={set('note')} />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
+// ── AI読取バッジ ──
+function AiBadge() {
+  return (
+    <span className="inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300 ml-1 align-middle">
+      <Sparkles className="w-2.5 h-2.5" />AI読取
+    </span>
+  )
+}
+
+// ── 設計変更フォームの共通フィールド群（AI読取バッジ対応版）──
+function DcFormFieldsWithBadge({ f, set, currentDetail, aiFields }) {
+  const ai = aiFields || {}
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <Field label={<>理由区分 *{ai.reason_category && <AiBadge />}</>}>
+        <select className={inputCls} value={f.reason_category} onChange={set('reason_category')}>
+          <option value="">選択してください</option>
+          {DC_REASON_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+        </select>
+      </Field>
+      <Field label={<>ステータス{ai.status && <AiBadge />}</>}>
+        <select className={inputCls} value={f.status} onChange={set('status')}>
+          {DC_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+      </Field>
+      <div className="md:col-span-2">
+        <Field label={<>変更タイトル *{ai.title && <AiBadge />}</>}>
+          <input className={inputCls} value={f.title} onChange={set('title')} placeholder="第○回設計変更 等" />
+        </Field>
+      </div>
+      <Field label={<>変更後契約金額（円）{ai.amount_after && <AiBadge />}</>}>
+        <div className="relative">
+          <input className={inputCls} type="number" value={f.amount_after} onChange={set('amount_after')} />
+          {currentDetail?.contract_amount != null && (
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              現在 {fmtYen(currentDetail.contract_amount)}
+            </p>
+          )}
+        </div>
+      </Field>
+      <Field label={<>変更後工期末{ai.end_date_after && <AiBadge />}</>}>
+        <input className={inputCls} type="date" value={f.end_date_after} onChange={set('end_date_after')} />
+        {currentDetail?.end_date && (
+          <p className="text-[11px] text-slate-400 mt-0.5">現在 {fmtDate(currentDetail.end_date)}</p>
+        )}
+      </Field>
+      <Field label={<>変更後完成検査日{ai.completion_inspection_date_after && <AiBadge />}</>}>
+        <input className={inputCls} type="date" value={f.completion_inspection_date_after} onChange={set('completion_inspection_date_after')} />
+        {currentDetail?.completion_inspection_date && (
+          <p className="text-[11px] text-slate-400 mt-0.5">現在 {fmtDate(currentDetail.completion_inspection_date)}</p>
+        )}
+      </Field>
+      <Field label={<>変更指示日{ai.instruction_date && <AiBadge />}</>}>
+        <input className={inputCls} type="date" value={f.instruction_date} onChange={set('instruction_date')} />
+      </Field>
+      <Field label={<>変更契約日{ai.agreement_date && <AiBadge />}</>}>
+        <input className={inputCls} type="date" value={f.agreement_date} onChange={set('agreement_date')} />
+      </Field>
+      <div className="md:col-span-2">
+        <Field label={<>変更内容・理由{ai.reason && <AiBadge />}</>}>
+          <textarea className={inputCls} rows={3} value={f.reason} onChange={set('reason')} placeholder="変更の詳細・根拠を記載" />
+        </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="備考">
+          <textarea className={inputCls} rows={2} value={f.note} onChange={set('note')} />
+        </Field>
+      </div>
+    </div>
+  )
+}
+
+// ── 設計変更 新規登録モーダル ──
+function NewDesignChangeModal({ detail, draft, confidence, summary, extractedFiles, onClose, onSaved, onError }) {
+  // draft があればプリフィル、なければ空
+  const hasDraft = !!draft
+  const [f, setF] = useState(() => ({
+    reason_category: draft?.reason_category || '',
+    title: draft?.title || '',
+    status: draft?.status || 'negotiating',
+    amount_after: draft?.amount_after != null ? String(draft.amount_after) : '',
+    end_date_after: draft?.end_date_after || '',
+    completion_inspection_date_after: draft?.completion_inspection_date_after || '',
+    instruction_date: draft?.instruction_date || '',
+    agreement_date: draft?.agreement_date || '',
+    reason: draft?.reason || '',
+    note: '',
+  }))
+
+  // ファイルごとのdoc_type（添付用）
+  const [fileMeta, setFileMeta] = useState(() =>
+    (extractedFiles || []).map((file) => ({ file, doc_type: DC_DOC_TYPES[0] }))
+  )
+
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+
+  // draftのどのフィールドがAI埋めか（空でないもの）
+  const aiFields = hasDraft ? Object.fromEntries(
+    Object.entries(draft).filter(([, v]) => v != null && v !== '')
+  ) : {}
+
+  const submit = async () => {
+    if (!f.title.trim()) { onError('変更タイトルは必須です'); return }
+    if (!f.reason_category) { onError('理由区分は必須です'); return }
+    setSaving(true)
+    try {
+      const payload = {
+        title: f.title,
+        reason_category: f.reason_category,
+        reason: f.reason,
+        status: f.status,
+        amount_after: f.amount_after !== '' ? Number(f.amount_after) : null,
+        end_date_after: f.end_date_after || null,
+        completion_inspection_date_after: f.completion_inspection_date_after || null,
+        instruction_date: f.instruction_date || null,
+        agreement_date: f.agreement_date || null,
+        note: f.note,
+      }
+      const { data: created } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/design-changes`, payload, authConfig()
+      )
+      const changeId = created.id
+
+      // 抽出元ファイルがあれば順次添付
+      if (fileMeta.length > 0 && changeId) {
+        const token = localStorage.getItem('authToken')
+        for (const meta of fileMeta) {
+          const fd = new FormData()
+          fd.append('file', meta.file)
+          fd.append('doc_type', meta.doc_type)
+          await axios.post(
+            `${apiUrl}/api/construction/design-changes/${changeId}/files`, fd,
+            { headers: { Authorization: `Bearer ${token}` } }
+          )
+        }
+      }
+
+      onSaved()
+    } catch (e) {
+      onError(e.response?.data?.error || '登録に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title="設計変更を追加" onClose={onClose} wide>
+      {/* AI抽出結果サマリ */}
+      {hasDraft && (
+        <div className="mb-4 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 px-4 py-3">
+          <div className="flex items-center gap-2 mb-1">
+            <Sparkles className="w-4 h-4 text-brand-500 shrink-0" />
+            <span className="text-xs font-semibold text-brand-700 dark:text-brand-300">書類から自動入力しました</span>
+            {confidence != null && (
+              <span className="text-[11px] text-slate-400 ml-auto">信頼度 {Math.round(confidence * 100)}%</span>
+            )}
+          </div>
+          {summary && (
+            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">{summary}</p>
+          )}
+          <p className="text-[11px] text-slate-400 mt-1">
+            <AiBadge /> マークの付いた項目はAIが読み取りました。内容を確認・修正してから登録してください。
+          </p>
+        </div>
+      )}
+
+      <DcFormFieldsWithBadge f={f} set={set} currentDetail={detail} aiFields={aiFields} />
+
+      {/* 抽出元ファイルの doc_type 選択 */}
+      {fileMeta.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-100 dark:border-ink-700">
+          <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1">
+            <Paperclip className="w-3.5 h-3.5" /> 読み込んだ書類を添付（書類種別を確認してください）
+          </p>
+          <ul className="space-y-2">
+            {fileMeta.map((meta, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <span className="text-xs text-slate-600 dark:text-slate-300 truncate flex-1 min-w-0">{meta.file.name}</span>
+                <select
+                  className={`${inputCls} w-40 shrink-0`}
+                  value={meta.doc_type}
+                  onChange={(e) => setFileMeta((prev) => prev.map((m, idx) =>
+                    idx === i ? { ...m, doc_type: e.target.value } : m
+                  ))}>
+                  {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
+                </select>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
+        <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />登録</>}</Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── 設計変更 編集モーダル ──
+function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
+  const [f, setF] = useState({
+    reason_category: change.reason_category || '',
+    title: change.title || '',
+    status: change.status || 'negotiating',
+    amount_after: change.amount_after != null ? String(change.amount_after) : '',
+    end_date_after: change.end_date_after || '',
+    completion_inspection_date_after: change.completion_inspection_date_after || '',
+    instruction_date: change.instruction_date || '',
+    agreement_date: change.agreement_date || '',
+    reason: change.reason || '',
+    note: change.note || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+
+  const submit = async () => {
+    if (!f.title.trim()) { onError('変更タイトルは必須です'); return }
+    if (!f.reason_category) { onError('理由区分は必須です'); return }
+    setSaving(true)
+    try {
+      const payload = {
+        title: f.title,
+        reason_category: f.reason_category,
+        reason: f.reason,
+        status: f.status,
+        amount_after: f.amount_after !== '' ? Number(f.amount_after) : null,
+        end_date_after: f.end_date_after || null,
+        completion_inspection_date_after: f.completion_inspection_date_after || null,
+        instruction_date: f.instruction_date || null,
+        agreement_date: f.agreement_date || null,
+        note: f.note,
+      }
+      await axios.patch(`${apiUrl}/api/construction/design-changes/${change.id}`, payload, authConfig())
+      onSaved()
+    } catch (e) {
+      onError(e.response?.data?.error || '更新に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={`第${change.change_no}回変更を編集`} onClose={onClose} wide>
+      {change.applied && (
+        <div className="mb-3 flex items-center gap-2 text-xs text-success-700 dark:text-success-300 bg-success-50 dark:bg-success-500/10 border border-success-200 dark:border-success-500/30 rounded-xl px-3 py-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          この変更は工事基本情報へ反映済みです。金額・工期を変更した場合は再度「反映」を行ってください。
+        </div>
+      )}
+      <DcFormFields f={f} set={set} currentDetail={detail} />
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
+        <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />保存</>}</Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── 設計変更 関連書類モーダル（ファイル管理 + 変更後数量書取込 + BOQ比較）──
+function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDetail, notify }) {
+  const [files, setFiles] = useState([])
+  const [loadingFiles, setLoadingFiles] = useState(true)
+  const [uploading, setUploading] = useState(false)
+  const [docType, setDocType] = useState(DC_DOC_TYPES[0])
+  const [boqUploading, setBoqUploading] = useState(false)
+  const [boqCompare, setBoqCompare] = useState(null)
+  const [boqLoading, setBoqLoading] = useState(false)
+  const [showBoq, setShowBoq] = useState(false)
+
+  const loadFiles = useCallback(async () => {
+    setLoadingFiles(true)
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/construction/design-changes/${change.id}/files`, authConfig())
+      setFiles(data || [])
+    } catch { /* noop */ } finally { setLoadingFiles(false) }
+  }, [change.id])
+
+  useEffect(() => { loadFiles() }, [loadFiles])
+
+  const onUploadFile = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('doc_type', docType)
+      const token = localStorage.getItem('authToken')
+      await axios.post(
+        `${apiUrl}/api/construction/design-changes/${change.id}/files`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      notify('ファイルをアップロードしました')
+      await loadFiles()
+    } catch (err) {
+      notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
+    } finally { setUploading(false); e.target.value = '' }
+  }
+
+  const onDeleteFile = async (fileId) => {
+    try {
+      await axios.delete(`${apiUrl}/api/construction/design-change-files/${fileId}`, authConfig())
+      setFiles((s) => s.filter((x) => x.id !== fileId))
+      notify('ファイルを削除しました')
+    } catch (err) {
+      notify(err.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }
+
+  // 変更後数量書(xlsx)取込
+  const onBoqUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setBoqUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('change_id', change.id)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/import-boq`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      notify(`変更後数量書を取込みました（明細 ${data.line_count} 件・総額 ${fmtYen(data.total)}）`)
+      await onReload()
+    } catch (err) {
+      notify(err.response?.data?.error || '数量書の取込に失敗しました', 'error')
+    } finally { setBoqUploading(false); e.target.value = '' }
+  }
+
+  // BOQ比較取得
+  const loadBoqCompare = async () => {
+    setBoqLoading(true)
+    setShowBoq(true)
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/construction/projects/${detail.id}/boq-compare?change_id=${change.id}`, authConfig())
+      setBoqCompare(data)
+    } catch (err) {
+      notify(err.response?.data?.error || '比較データの取得に失敗しました', 'error')
+      setShowBoq(false)
+    } finally { setBoqLoading(false) }
+  }
+
+  return (
+    <ModalShell title={`第${change.change_no}回変更 — 関連書類`} onClose={onClose} wide>
+      {/* ファイルアップロード */}
+      <div className="flex items-end gap-2 mb-3">
+        <div className="flex-1">
+          <Field label="書類種別">
+            <select className={inputCls} value={docType} onChange={(e) => setDocType(e.target.value)}>
+              {DC_DOC_TYPES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </Field>
+        </div>
+        <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1 px-3 py-2 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10">
+          {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+          アップロード
+          <input type="file" className="hidden" onChange={onUploadFile} disabled={uploading} />
+        </label>
+      </div>
+
+      {/* ファイル一覧 */}
+      {loadingFiles ? (
+        <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
+      ) : files.length === 0 ? (
+        <p className="text-xs text-slate-400 py-2">関連書類はまだありません。</p>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-ink-700 border border-slate-200 dark:border-ink-700 rounded-xl mb-4">
+          {files.map((file) => (
+            <li key={file.id} className="flex items-center gap-2 px-3 py-2">
+              <Badge tone="neutral">{file.doc_type || '—'}</Badge>
+              <a href={file.url} target="_blank" rel="noreferrer"
+                className="text-sm text-brand-600 dark:text-brand-400 hover:underline truncate flex-1 flex items-center gap-1">
+                {file.file_name}<ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+              {file.size_bytes != null && (
+                <span className="text-[11px] text-slate-400 shrink-0">{fmtBytes(file.size_bytes)}</span>
+              )}
+              <button onClick={() => onDeleteFile(file.id)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-danger-500 hover:bg-slate-100 dark:hover:bg-ink-700 shrink-0">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* 変更後数量書取込 + BOQ比較 */}
+      <div className="pt-4 border-t border-slate-100 dark:border-ink-700">
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1">
+            <FileSpreadsheet className="w-4 h-4 text-brand-500" /> 変更後数量書
+          </span>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
+              {boqUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              変更後数量書(xlsx)を取込
+              <input type="file" accept=".xlsx,.xlsm" className="hidden" onChange={onBoqUpload} disabled={boqUploading} />
+            </label>
+            <button onClick={loadBoqCompare} disabled={boqLoading}
+              className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 disabled:opacity-50">
+              {boqLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5" />}
+              当初との比較表示
+            </button>
+          </div>
+        </div>
+
+        {showBoq && (
+          boqLoading ? (
+            <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
+          ) : boqCompare ? (
+            <div>
+              {/* 合計行 */}
+              <div className="flex items-center gap-4 mb-2 px-2 py-2 bg-slate-50 dark:bg-ink-700/40 rounded-xl text-xs">
+                <span className="text-slate-500">当初合計 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boqCompare.base_total)}</span></span>
+                <span className="text-slate-500">変更後合計 <span className="font-bold text-slate-800 dark:text-slate-100 tabular-nums">{fmtYen(boqCompare.change_total)}</span></span>
+                <AmountDiff before={boqCompare.base_total} after={boqCompare.change_total} />
+              </div>
+              {/* 工種別比較テーブル */}
+              <div className="overflow-x-auto max-h-64 overflow-y-auto rounded-xl border border-slate-200 dark:border-ink-700">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 dark:bg-ink-700">
+                    <tr className="border-b border-slate-200 dark:border-ink-700">
+                      <th className="text-left px-3 py-1.5 text-slate-500 font-semibold">工種</th>
+                      <th className="text-right px-3 py-1.5 text-slate-500 font-semibold tabular-nums">当初</th>
+                      <th className="text-right px-3 py-1.5 text-slate-500 font-semibold tabular-nums">変更後</th>
+                      <th className="text-right px-3 py-1.5 text-slate-500 font-semibold tabular-nums">増減</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-ink-700/60">
+                    {(boqCompare.rows || []).map((row, i) => (
+                      <tr key={i} className="hover:bg-slate-50 dark:hover:bg-ink-700/20">
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-200">{row.trade}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-slate-500">{fmtYen(row.base_amount)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-slate-700 dark:text-slate-200">{fmtYen(row.change_amount)}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          <AmountDiff before={row.base_amount} after={row.change_amount} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null
+        )}
+      </div>
+
+      <div className="flex justify-end mt-5">
+        <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">閉じる</button>
       </div>
     </ModalShell>
   )
