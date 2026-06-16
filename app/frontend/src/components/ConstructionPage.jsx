@@ -1343,6 +1343,7 @@ function DesignChangeSection({ detail, notify, onReload }) {
     const files = e.target.files
     if (!files || !files.length) return
     setExtractBusy(true)
+    const selected = Array.from(files)
     try {
       const fd = new FormData()
       for (const file of files) fd.append('files', file)
@@ -1352,11 +1353,13 @@ function DesignChangeSection({ detail, notify, onReload }) {
         { headers: { Authorization: `Bearer ${token}` } }
       )
       setDraftData(data)
-      setExtractedFiles(Array.from(files))
-      setShowNew(true)
     } catch (err) {
-      notify(err.response?.data?.error || '書類の読み取りに失敗しました', 'error')
+      // AIで読めない資料(Excel等)のみ／抽出失敗でも、資料は添付して手入力で続行できるようにする
+      setDraftData(null)
+      notify('AIで読み取れる書類(PDF/画像)が無いため自動入力はスキップしました。手入力で登録できます（選んだ資料は添付されます）')
     } finally {
+      setExtractedFiles(selected)
+      setShowNew(true)
       setExtractBusy(false)
       e.target.value = ''
     }
@@ -1390,7 +1393,7 @@ function DesignChangeSection({ detail, notify, onReload }) {
             <input
               type="file"
               multiple
-              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.xlsx,.xls,.xlsm,.csv,.doc,.docx"
               className="hidden"
               onChange={onExtractFiles}
               disabled={extractBusy}
@@ -1876,6 +1879,7 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
     const files = e.target.files
     if (!files || !files.length) return
     setExtractBusy(true)
+    const selected = Array.from(files)
     try {
       const fd = new FormData()
       for (const file of files) fd.append('files', file)
@@ -1897,13 +1901,14 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
       })
       setAiFields((prev) => ({ ...prev, ...updated }))
       setAiInfo({ confidence: data?.confidence ?? null, summary: data?.summary || null })
+    } catch (err) {
+      // AIで読めない資料(Excel等)のみ／抽出失敗でも、資料は添付候補に積む（反映はスキップ）
+      setAiInfo({ confidence: null, summary: 'AIで読み取れる書類(PDF/画像)が無かったため自動反映はスキップしました。選んだ資料は保存時に添付されます。' })
+    } finally {
       setFileMeta((prev) => [
         ...prev,
-        ...Array.from(files).map((file) => ({ file, doc_type: DC_DOC_TYPES[0] })),
+        ...selected.map((file) => ({ file, doc_type: DC_DOC_TYPES[0] })),
       ])
-    } catch (err) {
-      onError(err.response?.data?.error || '書類の読み取りに失敗しました')
-    } finally {
       setExtractBusy(false)
       e.target.value = ''
     }
@@ -1973,7 +1978,7 @@ function EditDesignChangeModal({ change, detail, onClose, onSaved, onError }) {
               : 'border-brand-300 dark:border-brand-500/40 bg-white dark:bg-ink-800 text-brand-600 dark:text-brand-400 hover:bg-brand-100 dark:hover:bg-brand-500/20'}`}>
             {extractBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
             資料を追加
-            <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" className="hidden" onChange={onAddDocs} disabled={extractBusy} />
+            <input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.xlsx,.xls,.xlsm,.csv,.doc,.docx" className="hidden" onChange={onAddDocs} disabled={extractBusy} />
           </label>
         </div>
         {aiInfo?.summary && (
