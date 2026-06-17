@@ -96,6 +96,8 @@ function CardThumb({ imageUrl, name }) {
       <img
         src={imageUrl}
         alt={name || '名刺'}
+        loading="lazy"
+        decoding="async"
         className="w-full h-28 object-cover rounded-xl bg-slate-100 dark:bg-ink-700"
       />
     )
