@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Plus, Pencil, Trash2, X, Save, Search, Loader2,
-  Camera, Upload, User, Building2, Phone, Mail, Sparkles,
+  Camera, Upload, User, Building2, Phone, Mail, Sparkles, Tag,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -124,13 +124,17 @@ const EMPTY_FORM = {
   website: '',
   qualifications: '',
   note: '',
-  visibility: 'private',
+  visibility: 'shared',  // (2) デフォルトを全社共有に変更
+  category: '',
 }
 
 // ─────────────────────────────────────────────────────────
 // 登録/編集フォームモーダル
+// mode: 'scan' = 撮影・ファイル登録（画像エリアを最初から表示）
+//       'manual' = 手入力（画像エリアは初期非表示）
+//       undefined = 編集時（従来どおり画像差し替え可）
 // ─────────────────────────────────────────────────────────
-function CardFormModal({ item, onClose, onSaved, showToast }) {
+function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
   const isNew = !item?.id
   const [form, setForm] = useState(() => {
     if (!item) return EMPTY_FORM
@@ -149,18 +153,35 @@ function CardFormModal({ item, onClose, onSaved, showToast }) {
       website: pick(item.website),
       qualifications: pick(item.qualifications),
       note: pick(item.note),
-      visibility: item.visibility || 'private',
+      visibility: item.visibility || 'shared',
+      category: pick(item.category),
     }
   })
   const [saving, setSaving] = useState(false)
   const [imageFile, setImageFile] = useState(null)        // 新しく選択した画像
   const [imagePreview, setImagePreview] = useState(item?.image_url || null)
   const [scanning, setScanning] = useState(false)         // OCR中
+  const [categoryOptions, setCategoryOptions] = useState([])  // (4) カテゴリ候補
+  // manual モードで画像添付エリアを表示するかどうか
+  const [showImageArea, setShowImageArea] = useState(mode !== 'manual')
 
   const cameraRef = useRef(null)
   const fileRef = useRef(null)
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+
+  // (4) フォームを開く際にカテゴリ候補を取得
+  useEffect(() => {
+    axios.get(`${apiUrl}/api/cards/categories`, authConfig())
+      .then((res) => {
+        // レスポンス形式: { categories: [...] }
+        setCategoryOptions(res.data?.categories || [])
+      })
+      .catch(() => {
+        // 候補取得失敗は無視（空のままで手入力可能）
+        setCategoryOptions([])
+      })
+  }, [])
 
   // 画像を選択したとき: プレビュー＋自動OCR
   const handleImageSelect = async (file) => {
@@ -201,7 +222,8 @@ function CardFormModal({ item, onClose, onSaved, showToast }) {
     try {
       const fd = new FormData()
       if (imageFile) fd.append('file', imageFile)
-      const fields = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note','visibility']
+      // (3) category を追加したフィールドリストで送信
+      const fields = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note','visibility','category']
       for (const k of fields) fd.append(k, form[k])
 
       if (isNew) {
@@ -220,69 +242,101 @@ function CardFormModal({ item, onClose, onSaved, showToast }) {
     }
   }
 
-  return (
-    <ModalShell title={isNew ? '名刺を登録' : '名刺を編集'} onClose={onClose} wide>
-      {/* 画像選択エリア */}
-      <div className="mb-5 rounded-2xl border border-brand-200 dark:border-brand-500/30 bg-brand-50/60 dark:bg-brand-500/10 p-4">
-        <div className="flex items-center gap-2 mb-1">
-          <Sparkles className="w-4 h-4 text-brand-600 dark:text-brand-400" />
-          <p className="text-sm font-bold text-brand-700 dark:text-brand-300">
-            {isNew ? '名刺を撮影・選択して自動入力' : '名刺画像を変更'}
-          </p>
-        </div>
-        {isNew && (
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-            スマホのカメラで撮影、またはファイルを選択すると、AIが名刺の情報を読み取って自動入力します。
-            画像なしの手入力のみでも登録できます。
-          </p>
-        )}
+  // モーダルタイトルを mode に応じて決定
+  const modalTitle = isNew
+    ? (mode === 'manual' ? '手入力で登録' : '撮影・ファイルで登録')
+    : '名刺を編集'
 
-        {/* プレビュー */}
-        {imagePreview && (
-          <div className="mb-3 relative w-fit">
-            <img
-              src={imagePreview}
-              alt="名刺プレビュー"
-              className="h-32 rounded-xl object-cover border border-slate-200 dark:border-ink-600"
-            />
-            {scanning && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl">
-                <Loader2 className="w-6 h-6 text-white animate-spin" />
-                <span className="ml-2 text-white text-sm font-semibold">読み取り中...</span>
-              </div>
+  return (
+    <ModalShell title={modalTitle} onClose={onClose} wide>
+      {/* (1) 画像選択エリア: scan モードは常時表示、manual モードはトグルで表示、編集時は常時表示 */}
+      {showImageArea ? (
+        <div className="mb-5 rounded-2xl border border-brand-200 dark:border-brand-500/30 bg-brand-50/60 dark:bg-brand-500/10 p-4">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+              <p className="text-sm font-bold text-brand-700 dark:text-brand-300">
+                {isNew ? '名刺を撮影・選択して自動入力' : '名刺画像を変更'}
+              </p>
+            </div>
+            {/* manual モードでは画像エリアを閉じるボタンを表示 */}
+            {mode === 'manual' && isNew && (
+              <button
+                type="button"
+                onClick={() => setShowImageArea(false)}
+                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 underline"
+              >
+                閉じる
+              </button>
             )}
           </div>
-        )}
+          {isNew && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+              スマホのカメラで撮影、またはファイルを選択すると、AIが名刺の情報を読み取って自動入力します。
+            </p>
+          )}
 
-        <div className="flex flex-wrap gap-2">
-          {/* カメラ撮影（スマホ背面カメラ） */}
-          <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
-            <Camera className="w-4 h-4" />
-            カメラで撮影
-            <input
-              ref={cameraRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
-            />
-          </label>
+          {/* プレビュー */}
+          {imagePreview && (
+            <div className="mb-3 relative w-fit">
+              <img
+                src={imagePreview}
+                alt="名刺プレビュー"
+                className="h-32 rounded-xl object-cover border border-slate-200 dark:border-ink-600"
+              />
+              {scanning && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl">
+                  <Loader2 className="w-6 h-6 text-white animate-spin" />
+                  <span className="ml-2 text-white text-sm font-semibold">読み取り中...</span>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* ファイル選択（PCや既存写真） */}
-          <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
-            <Upload className="w-4 h-4" />
-            ファイルを選択
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
-            />
-          </label>
+          <div className="flex flex-wrap gap-2">
+            {/* カメラ撮影（スマホ背面カメラ） */}
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
+              <Camera className="w-4 h-4" />
+              カメラで撮影
+              <input
+                ref={cameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
+              />
+            </label>
+
+            {/* ファイル選択（PCや既存写真） */}
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
+              <Upload className="w-4 h-4" />
+              ファイルを選択
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
+              />
+            </label>
+          </div>
         </div>
-      </div>
+      ) : (
+        /* manual モードで画像エリアが非表示のとき: 添付ボタンを表示 */
+        mode === 'manual' && isNew && (
+          <div className="mb-5">
+            <button
+              type="button"
+              onClick={() => setShowImageArea(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-ink-600"
+            >
+              <Upload className="w-4 h-4" />
+              画像を添付（任意）
+            </button>
+          </div>
+        )
+      )}
 
       {/* フォーム */}
       <div className="space-y-4">
@@ -341,10 +395,26 @@ function CardFormModal({ item, onClose, onSaved, showToast }) {
           />
         </Field>
 
+        {/* (3) カテゴリ入力（datalist で既存候補表示 + 自由入力） */}
+        <Field label="カテゴリ">
+          <input
+            className={inputCls}
+            value={form.category}
+            onChange={(e) => set('category', e.target.value)}
+            list="card-category-list"
+            placeholder="例: 官公庁、協力会社（任意）"
+          />
+          <datalist id="card-category-list">
+            {categoryOptions.map((opt) => (
+              <option key={opt} value={opt} />
+            ))}
+          </datalist>
+        </Field>
+
         <Field label="公開範囲">
           <select className={inputCls} value={form.visibility} onChange={(e) => set('visibility', e.target.value)}>
-            <option value="private">個人のみ（自分だけ閲覧可）</option>
             <option value="shared">全社共有</option>
+            <option value="private">個人のみ（自分だけ閲覧可）</option>
           </select>
         </Field>
       </div>
@@ -388,10 +458,16 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
         {/* 画像 */}
         <div className="sm:w-48 shrink-0">
           <CardThumb imageUrl={card.image_url} name={card.full_name} />
-          <div className="mt-2 flex justify-center">
+          <div className="mt-2 flex flex-wrap justify-center gap-1">
             <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
               {card.visibility === 'shared' ? '全社共有' : '個人'}
             </Badge>
+            {/* (3) カテゴリバッジ */}
+            {card.category && (
+              <Badge tone="warning">
+                <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -496,7 +572,8 @@ export default function BusinessCardsPage({ onBack }) {
   const [search, setSearch] = useState('')
   const [scope, setScope] = useState('all') // 'all' | 'mine' | 'shared'
   const [selectedCard, setSelectedCard] = useState(null)  // 詳細表示中の名刺オブジェクト
-  const [editing, setEditing] = useState(null)            // null=非表示 / {}=新規 / item=編集
+  // editing: null=非表示 / { mode: 'scan'|'manual' }=新規 / item=編集
+  const [editing, setEditing] = useState(null)
   const [toast, setToast] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [currentUserEmail, setCurrentUserEmail] = useState('')
@@ -560,9 +637,13 @@ export default function BusinessCardsPage({ onBack }) {
             <Building2 className="w-5 h-5 text-brand-500" />
             <h1 className="text-lg font-bold text-slate-900 dark:text-white">名刺管理</h1>
           </div>
-          <div className="ml-auto">
-            <Button variant="primary" size="sm" onClick={() => setEditing({})}>
-              <Plus className="w-4 h-4" />名刺を登録
+          {/* (1) 登録ボタンを2つに分割 */}
+          <div className="ml-auto flex items-center gap-2">
+            <Button variant="primary" size="sm" onClick={() => setEditing({ mode: 'scan' })}>
+              <Camera className="w-4 h-4" />撮影・ファイルで登録
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => setEditing({ mode: 'manual' })}>
+              <Plus className="w-4 h-4" />手入力で登録
             </Button>
           </div>
         </div>
@@ -661,10 +742,16 @@ export default function BusinessCardsPage({ onBack }) {
                 </div>
 
                 {/* バッジ */}
-                <div className="mt-auto pt-1">
+                <div className="mt-auto pt-1 flex flex-wrap gap-1">
                   <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
                     {card.visibility === 'shared' ? '全社共有' : '個人'}
                   </Badge>
+                  {/* (3) カテゴリバッジ */}
+                  {card.category && (
+                    <Badge tone="warning">
+                      <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
+                    </Badge>
+                  )}
                 </div>
               </button>
             ))}
@@ -689,6 +776,7 @@ export default function BusinessCardsPage({ onBack }) {
       {editing !== null && (
         <CardFormModal
           item={editing?.id ? editing : null}
+          mode={editing?.mode}
           onClose={() => setEditing(null)}
           onSaved={loadCards}
           showToast={showToast}
