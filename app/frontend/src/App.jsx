@@ -55,32 +55,39 @@ const DEFAULT_SERVER_SETTINGS = {
 }
 
 /**
- * rawApps をサーバー設定（pinned/favorites/order）に基づいて並び替える。
- * ピン留め優先 → 保存 order 順 → 残りは元順。
+ * rawApps をこのアカウントの「使用頻度の高い順」に並び替える。
+ * 並び順の優先度: ① ピン留め（明示的な意思）→ ② 使用回数の多い順 →
+ * ③ 最近使った順 → ④ 元の定義順（同点時の安定化）。
+ * 使用回数 use_count / last_used_at は /api/apps が各アプリに付与する。
+ * グリッドは行優先（左上→右へ横読み）なので、先頭ほど左上に並ぶ。
  */
 function sortAppsWithSettings(rawList, serverSettings) {
-  const { pinned = [], favorites = [], order = [] } = serverSettings?.apps || {}
+  const { pinned = [], favorites = [] } = serverSettings?.apps || {}
   const pinnedSet = new Set(pinned.map(String))
   const favSet = new Set(favorites.map(String))
 
-  // サーバーの order 配列で並べ替え（order にないものは末尾）
-  const ordered = [...rawList].sort((a, b) => {
-    const ia = order.indexOf(String(a.id))
-    const ib = order.indexOf(String(b.id))
-    if (ia === -1 && ib === -1) return 0
-    if (ia === -1) return 1
-    if (ib === -1) return -1
-    return ia - ib
-  })
-
-  // ピン留め優先で再ソート
-  ordered.sort((a, b) => {
+  // 元の定義順を保持して同点時の並びを安定させる
+  const withIndex = rawList.map((app, i) => ({ app, i }))
+  withIndex.sort((x, y) => {
+    const a = x.app
+    const b = y.app
+    // ① ピン留め優先
     const pa = pinnedSet.has(String(a.id)) ? 0 : 1
     const pb = pinnedSet.has(String(b.id)) ? 0 : 1
-    return pa - pb
+    if (pa !== pb) return pa - pb
+    // ② 使用回数の多い順
+    const ua = a.use_count || 0
+    const ub = b.use_count || 0
+    if (ua !== ub) return ub - ua
+    // ③ 最近使った順
+    const ta = a.last_used_at ? Date.parse(a.last_used_at) : 0
+    const tb = b.last_used_at ? Date.parse(b.last_used_at) : 0
+    if (ta !== tb) return tb - ta
+    // ④ 元の定義順
+    return x.i - y.i
   })
 
-  return ordered.map((app) => ({
+  return withIndex.map(({ app }) => ({
     ...app,
     pinned: pinnedSet.has(String(app.id)),
     favorite: favSet.has(String(app.id)),
@@ -630,8 +637,22 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
-  // アプリを設定順で並び替え（「バグ報告・改善 一覧」カードは /api/apps 側で管理者のみに絞られる）
+  // アプリを使用頻度順で並び替え（「バグ報告・改善 一覧」カードは /api/apps 側で管理者のみに絞られる）
   const sortedApps = loading ? apps : sortAppsWithSettings(apps, serverSettings)
+
+  // アプリを開いたことをサーバーに記録（使用頻度カウント）。結果は待たず発火する。
+  // keepalive: 外部リンクでページ遷移してもリクエストを生存させる。失敗は無視（並び替えの補助情報のため）。
+  const recordAppUsage = (key) => {
+    if (!key) return
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const token = localStorage.getItem('authToken')
+    fetch(`${apiUrl}/api/apps/usage`, {
+      method: 'POST',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ key }),
+    }).catch(() => {})
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -775,7 +796,7 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
 
                 if (app.internal) {
                   return (
-                    <button key={app.id} type="button" onClick={() => onOpenInternal?.(app.view)} className={cardCls}>
+                    <button key={app.id} type="button" onClick={() => { recordAppUsage(app.key); onOpenInternal?.(app.view) }} className={cardCls}>
                       {cardInner}
                     </button>
                   )
@@ -785,6 +806,7 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
                   <a
                     key={app.id}
                     href={app.url}
+                    onClick={() => recordAppUsage(app.key)}
                     className="group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block relative"
                   >
                     {/* ピン留め・お気に入りアイコン */}

@@ -4,8 +4,6 @@ import {
   ArrowLeft,
   Star,
   Pin,
-  ChevronUp,
-  ChevronDown,
   Bell,
   Monitor,
   Sun,
@@ -90,33 +88,33 @@ export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * rawApps をサーバー設定（pinned/favorites/order）に基づいて初期化する。
-   * ピン留め優先 → 保存 order 順 → 残りは元順。
+   * rawApps をダッシュボードと同じ「使用頻度順」で初期化する。
+   * 優先度: ① ピン留め → ② 使用回数の多い順 → ③ 最近使った順 → ④ 元の定義順。
+   * use_count / last_used_at は /api/apps が各アプリに付与する。
    */
   function initAppOrder(rawList, serverSettings) {
-    const { pinned = [], favorites = [], order = [] } = serverSettings?.apps || {}
+    const { pinned = [], favorites = [] } = serverSettings?.apps || {}
     const pinnedSet = new Set(pinned)
     const favSet = new Set(favorites)
 
-    // サーバーの order 配列で並べ替え、order にないものは末尾へ
-    const ordered = [...rawList].sort((a, b) => {
-      const ia = order.indexOf(String(a.id))
-      const ib = order.indexOf(String(b.id))
-      if (ia === -1 && ib === -1) return 0
-      if (ia === -1) return 1
-      if (ib === -1) return -1
-      return ia - ib
-    })
-
-    // ピン留め優先で再ソート
-    ordered.sort((a, b) => {
+    const withIndex = rawList.map((app, i) => ({ app, i }))
+    withIndex.sort((x, y) => {
+      const a = x.app
+      const b = y.app
       const pa = pinnedSet.has(String(a.id)) ? 0 : 1
       const pb = pinnedSet.has(String(b.id)) ? 0 : 1
-      return pa - pb
+      if (pa !== pb) return pa - pb
+      const ua = a.use_count || 0
+      const ub = b.use_count || 0
+      if (ua !== ub) return ub - ua
+      const ta = a.last_used_at ? Date.parse(a.last_used_at) : 0
+      const tb = b.last_used_at ? Date.parse(b.last_used_at) : 0
+      if (ta !== tb) return tb - ta
+      return x.i - y.i
     })
 
     setAppOrder(
-      ordered.map((app) => ({
+      withIndex.map(({ app }) => ({
         ...app,
         pinned: pinnedSet.has(String(app.id)),
         favorite: favSet.has(String(app.id)),
@@ -143,17 +141,6 @@ export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }
   const handleStartScreenChange = (val) => {
     setStartScreen(val)
     localStorage.setItem('startScreen', val)
-  }
-
-  // --- アプリ並び替え ---
-  const moveApp = (idx, dir) => {
-    setAppOrder((prev) => {
-      const arr = [...prev]
-      const target = idx + dir
-      if (target < 0 || target >= arr.length) return arr
-      ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
-      return arr
-    })
   }
 
   const togglePinned = (idx) => {
@@ -329,7 +316,7 @@ export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }
             アプリのカスタマイズ
           </h2>
           <p className="text-xs text-slate-400 dark:text-slate-500 mb-4">
-            ピン留め・お気に入り・並び順はダッシュボードに反映されます
+            ダッシュボードのアプリは使用頻度の高い順に自動で並びます。ピン留めしたアプリは常に先頭に固定されます。
           </p>
 
           {/* KPI 表示スイッチ */}
@@ -396,26 +383,6 @@ export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }
                         }`}
                     >
                       <Pin className="w-4 h-4" />
-                    </button>
-
-                    {/* 上へ */}
-                    <button
-                      onClick={() => moveApp(idx, -1)}
-                      disabled={idx === 0}
-                      aria-label="上へ移動"
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-700 disabled:opacity-30 transition"
-                    >
-                      <ChevronUp className="w-4 h-4" />
-                    </button>
-
-                    {/* 下へ */}
-                    <button
-                      onClick={() => moveApp(idx, 1)}
-                      disabled={idx === appOrder.length - 1}
-                      aria-label="下へ移動"
-                      className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-700 disabled:opacity-30 transition"
-                    >
-                      <ChevronDown className="w-4 h-4" />
                     </button>
                   </div>
                 </li>
