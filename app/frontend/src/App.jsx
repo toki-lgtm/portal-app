@@ -369,8 +369,6 @@ function NotificationBell({ stats, apps, announcementUnreadCount, documentsUnrea
           {patrolApp && (
             <a
               href={patrolApp.url}
-              target="_blank"
-              rel="noopener noreferrer"
               className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline"
             >
               安全パトロールを開く
@@ -787,8 +785,6 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
                   <a
                     key={app.id}
                     href={app.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
                     className="group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block relative"
                   >
                     {/* ピン留め・お気に入りアイコン */}
