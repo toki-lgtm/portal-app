@@ -18,8 +18,11 @@ function authConfig() {
 
 // multipart 用 axios 設定
 function authConfigMultipart() {
+  // Content-Type は指定しない。axios が FormData を検出して
+  // boundary 付きの multipart/form-data を自動設定する（手動指定すると
+  // boundary が欠落し、サーバー側(multer)がファイルをパースできなくなる）。
   const token = localStorage.getItem('authToken')
-  return { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' } }
+  return { headers: { Authorization: `Bearer ${token}` } }
 }
 
 // 日付（YYYY/M/D）
