@@ -174,7 +174,8 @@ function CardFormModal({ item, onClose, onSaved, showToast }) {
       const fd = new FormData()
       fd.append('file', file)
       const res = await axios.post(`${apiUrl}/api/cards/scan`, fd, authConfigMultipart())
-      const fields = res.data || {}
+      // API は { extracted: {...} } 形式で返す（直下ではなく extracted を読む）
+      const fields = res.data?.extracted || res.data || {}
       setForm((prev) => {
         const next = { ...prev }
         const keys = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note']
