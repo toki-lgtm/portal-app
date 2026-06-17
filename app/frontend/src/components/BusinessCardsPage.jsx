@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Plus, Pencil, Trash2, X, Save, Search, Loader2,
@@ -433,10 +433,37 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
 // ─────────────────────────────────────────────────────────
 // 詳細/編集モーダル
 // ─────────────────────────────────────────────────────────
-function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onDeleted, showToast }) {
+function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onDeleted, onRefresh, showToast }) {
   const [deleting, setDeleting] = useState(false)
 
   const canEdit = isAdmin || card.owner_email === currentUserEmail
+
+  // マイカテゴリ（個人ラベル）— 閲覧できる人なら誰でも設定可
+  const [myCat, setMyCat] = useState(card.my_category || '')
+  const [savedMyCat, setSavedMyCat] = useState(card.my_category || '')  // 保存済みベースライン
+  const [myCatSaving, setMyCatSaving] = useState(false)
+  const [myCatOptions, setMyCatOptions] = useState([])
+  const myCatDirty = (myCat || '').trim() !== (savedMyCat || '').trim()
+
+  useEffect(() => {
+    axios.get(`${apiUrl}/api/cards/my-categories`, authConfig())
+      .then((res) => setMyCatOptions(res.data?.categories || []))
+      .catch(() => setMyCatOptions([]))
+  }, [])
+
+  const saveMyCat = async () => {
+    setMyCatSaving(true)
+    try {
+      await axios.put(`${apiUrl}/api/cards/${card.id}/my-category`, { category: myCat.trim() }, authConfig())
+      setSavedMyCat(myCat.trim())
+      showToast('success', myCat.trim() ? 'マイカテゴリを保存しました' : 'マイカテゴリを解除しました')
+      onRefresh?.()
+    } catch {
+      showToast('error', 'マイカテゴリの保存に失敗しました')
+    } finally {
+      setMyCatSaving(false)
+    }
+  }
 
   const handleDelete = async () => {
     if (!confirm(`「${card.full_name || card.company || '名刺'}」を削除しますか？`)) return
@@ -467,6 +494,12 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
               <Badge tone="warning">
                 <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
               </Badge>
+            )}
+            {/* マイカテゴリバッジ（本人だけに見える） */}
+            {card.my_category && (
+              <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300">
+                <User className="w-3 h-3" />{card.my_category}
+              </span>
             )}
           </div>
         </div>
@@ -541,6 +574,30 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
         </div>
       )}
 
+      {/* マイカテゴリ（自分だけに見える個人ラベル） */}
+      <div className="mt-4 rounded-xl border border-violet-200 dark:border-violet-500/30 bg-violet-50/60 dark:bg-violet-500/10 p-3">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <User className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+          <p className="text-xs font-bold text-violet-700 dark:text-violet-300">マイカテゴリ（自分だけに見えます）</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            className="flex-1 px-3 py-2 rounded-xl border border-violet-200 dark:border-violet-500/40 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-400"
+            value={myCat}
+            onChange={(e) => setMyCat(e.target.value)}
+            list="my-category-list"
+            placeholder="例: 重要、要フォロー（空欄で解除）"
+          />
+          <datalist id="my-category-list">
+            {myCatOptions.map((opt) => (<option key={opt} value={opt} />))}
+          </datalist>
+          <Button variant="secondary" size="sm" onClick={saveMyCat} disabled={myCatSaving || !myCatDirty}>
+            {myCatSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            保存
+          </Button>
+        </div>
+      </div>
+
       <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
         登録: {fmtDate(card.created_at)}
         {card.owner_email ? ` ・ 登録者: ${card.owner_email}` : ''}
@@ -564,6 +621,78 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
 }
 
 // ─────────────────────────────────────────────────────────
+// 名刺タイル（一覧の1枚。フラット表示・グループ表示で共用）
+// ─────────────────────────────────────────────────────────
+function CardTile({ card, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 shadow-sm hover:shadow-md hover:border-brand-300 dark:hover:border-brand-500/50 transition p-4 flex flex-col gap-2"
+    >
+      {/* サムネイル */}
+      <CardThumb imageUrl={card.image_url} name={card.full_name} />
+
+      {/* 名前・会社 */}
+      <div className="min-w-0">
+        <p className="font-bold text-slate-900 dark:text-white truncate text-sm">
+          {card.full_name || '（氏名未登録）'}
+        </p>
+        {card.company && (
+          <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{card.company}</p>
+        )}
+        {card.title && (
+          <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.title}</p>
+        )}
+        {card.department && (
+          <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.department}</p>
+        )}
+      </div>
+
+      {/* 連絡先 */}
+      <div className="space-y-0.5 min-w-0">
+        {card.phone && (
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <Phone className="w-3 h-3 shrink-0" />
+            <span className="truncate">{card.phone}</span>
+          </div>
+        )}
+        {card.email && (
+          <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <Mail className="w-3 h-3 shrink-0" />
+            <span className="truncate">{card.email}</span>
+          </div>
+        )}
+        {card.qualifications && (
+          <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.qualifications}</p>
+        )}
+      </div>
+
+      {/* バッジ */}
+      <div className="mt-auto pt-1 flex flex-wrap gap-1">
+        <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
+          {card.visibility === 'shared' ? '全社共有' : '個人'}
+        </Badge>
+        {card.category && (
+          <Badge tone="warning">
+            <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
+          </Badge>
+        )}
+        {/* マイカテゴリ（本人だけに見える個人ラベル） */}
+        {card.my_category && (
+          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300">
+            <User className="w-3 h-3" />{card.my_category}
+          </span>
+        )}
+      </div>
+    </button>
+  )
+}
+
+// 未分類グループ用のラベル（カテゴリ未設定の名刺をまとめる）
+const UNCATEGORIZED = '__uncat__'
+
+// ─────────────────────────────────────────────────────────
 // メインページ
 // ─────────────────────────────────────────────────────────
 export default function BusinessCardsPage({ onBack }) {
@@ -571,6 +700,8 @@ export default function BusinessCardsPage({ onBack }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [scope, setScope] = useState('all') // 'all' | 'mine' | 'shared'
+  const [categoryFilter, setCategoryFilter] = useState('all') // 'all' | カテゴリ名 | UNCATEGORIZED
+  const [categoryAxis, setCategoryAxis] = useState('shared')  // 'shared'=全社カテゴリ | 'mine'=マイカテゴリ
   const [selectedCard, setSelectedCard] = useState(null)  // 詳細表示中の名刺オブジェクト
   // editing: null=非表示 / { mode: 'scan'|'manual' }=新規 / item=編集
   const [editing, setEditing] = useState(null)
@@ -624,6 +755,62 @@ export default function BusinessCardsPage({ onBack }) {
     { value: 'mine',   label: '自分が登録' },
     { value: 'shared', label: '全社共有' },
   ]
+
+  // 分類軸に応じて名刺のカテゴリ値を取り出す
+  // shared = 全社カテゴリ(card.category) / mine = マイカテゴリ(card.my_category)
+  const catOf = useCallback(
+    (card) => ((categoryAxis === 'mine' ? card.my_category : card.category) || '').trim(),
+    [categoryAxis],
+  )
+
+  // 現在読み込んでいる名刺から、選択中の軸で存在するカテゴリ一覧（件数付き）を導出
+  const { catList, uncatCount } = useMemo(() => {
+    const counts = new Map()
+    let uncat = 0
+    for (const c of cards) {
+      const name = catOf(c)
+      if (name) counts.set(name, (counts.get(name) || 0) + 1)
+      else uncat += 1
+    }
+    const list = [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+    return { catList: list, uncatCount: uncat }
+  }, [cards, catOf])
+
+  // カテゴリ絞り込みを適用した表示対象
+  const visibleCards = useMemo(() => {
+    if (categoryFilter === 'all') return cards
+    if (categoryFilter === UNCATEGORIZED) return cards.filter((c) => !catOf(c))
+    return cards.filter((c) => catOf(c) === categoryFilter)
+  }, [cards, categoryFilter, catOf])
+
+  // 「すべて」表示時はカテゴリごとにグループ分けする（分けない場合は null）
+  const groups = useMemo(() => {
+    if (categoryFilter !== 'all') return null
+    const g = catList.map((c) => ({
+      key: c.name,
+      label: c.name,
+      items: cards.filter((card) => catOf(card) === c.name),
+    }))
+    if (uncatCount > 0) {
+      g.push({
+        key: UNCATEGORIZED,
+        label: '未分類',
+        items: cards.filter((card) => !catOf(card)),
+      })
+    }
+    return g
+  }, [cards, catList, uncatCount, categoryFilter, catOf])
+
+  // 軸を切り替えたら絞り込みを「すべて」に戻す
+  useEffect(() => { setCategoryFilter('all') }, [categoryAxis])
+
+  // 選択中のカテゴリが消えたら「すべて」に戻す
+  useEffect(() => {
+    if (categoryFilter === 'all' || categoryFilter === UNCATEGORIZED) return
+    if (!catList.some((c) => c.name === categoryFilter)) setCategoryFilter('all')
+  }, [catList, categoryFilter])
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
@@ -680,6 +867,68 @@ export default function BusinessCardsPage({ onBack }) {
           </div>
         </div>
 
+        {/* 分類軸の切替（全社カテゴリ / マイカテゴリ）＋ カテゴリ絞り込みチップ */}
+        {cards.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 mb-6">
+            {/* 軸切替 */}
+            <div className="flex rounded-xl border border-slate-200 dark:border-ink-600 overflow-hidden bg-white dark:bg-ink-700 mr-1">
+              {[
+                { value: 'shared', label: '全社カテゴリ' },
+                { value: 'mine',   label: 'マイカテゴリ' },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setCategoryAxis(opt.value)}
+                  className={`px-3 py-1.5 text-xs font-bold transition
+                    ${categoryAxis === opt.value
+                      ? (opt.value === 'mine' ? 'bg-violet-600 text-white' : 'bg-brand-600 text-white')
+                      : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-ink-600'
+                    }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setCategoryFilter('all')}
+              className={`px-3 py-1.5 rounded-full text-sm font-semibold transition border
+                ${categoryFilter === 'all'
+                  ? 'bg-brand-600 text-white border-brand-600'
+                  : 'bg-white dark:bg-ink-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-ink-600 hover:bg-slate-50 dark:hover:bg-ink-600'
+                }`}
+            >
+              すべて
+            </button>
+            {catList.map((c) => (
+              <button
+                key={c.name}
+                onClick={() => setCategoryFilter(c.name)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold transition border
+                  ${categoryFilter === c.name
+                    ? 'bg-brand-600 text-white border-brand-600'
+                    : 'bg-white dark:bg-ink-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-ink-600 hover:bg-slate-50 dark:hover:bg-ink-600'
+                  }`}
+              >
+                {c.name}
+                <span className={`ml-1.5 ${categoryFilter === c.name ? 'text-white/70' : 'text-slate-400 dark:text-slate-500'}`}>{c.count}</span>
+              </button>
+            ))}
+            {uncatCount > 0 && (
+              <button
+                onClick={() => setCategoryFilter(UNCATEGORIZED)}
+                className={`px-3 py-1.5 rounded-full text-sm font-semibold transition border
+                  ${categoryFilter === UNCATEGORIZED
+                    ? 'bg-brand-600 text-white border-brand-600'
+                    : 'bg-white dark:bg-ink-700 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-ink-600 hover:bg-slate-50 dark:hover:bg-ink-600'
+                  }`}
+              >
+                未分類
+                <span className={`ml-1.5 ${categoryFilter === UNCATEGORIZED ? 'text-white/70' : 'text-slate-400 dark:text-slate-500'}`}>{uncatCount}</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {/* 一覧 */}
         {loading ? (
           <div className="text-center py-20">
@@ -694,66 +943,35 @@ export default function BusinessCardsPage({ onBack }) {
               <p className="text-xs mt-1">条件を変えて検索してみてください</p>
             )}
           </div>
+        ) : groups ? (
+          /* 「すべて」表示: カテゴリごとにセクション分けして表示 */
+          <div className="space-y-8">
+            {groups.map((g) => (
+              <section key={g.key}>
+                <div className="flex items-center gap-2 mb-3">
+                  {g.key === UNCATEGORIZED
+                    ? <span className="text-sm font-bold text-slate-400 dark:text-slate-500">{g.label}</span>
+                    : (
+                      <span className="inline-flex items-center gap-1 text-sm font-bold text-slate-700 dark:text-slate-200">
+                        <Tag className="w-4 h-4 text-brand-500" />{g.label}
+                      </span>
+                    )}
+                  <span className="text-xs font-semibold text-slate-400 dark:text-slate-500">{g.items.length}件</span>
+                  <div className="flex-1 border-t border-slate-200 dark:border-ink-700" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {g.items.map((card) => (
+                    <CardTile key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         ) : (
+          /* 特定カテゴリ選択時: フラット表示 */
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {cards.map((card) => (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => setSelectedCard(card)}
-                className="text-left bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 shadow-sm hover:shadow-md hover:border-brand-300 dark:hover:border-brand-500/50 transition p-4 flex flex-col gap-2"
-              >
-                {/* サムネイル */}
-                <CardThumb imageUrl={card.image_url} name={card.full_name} />
-
-                {/* 名前・会社 */}
-                <div className="min-w-0">
-                  <p className="font-bold text-slate-900 dark:text-white truncate text-sm">
-                    {card.full_name || '（氏名未登録）'}
-                  </p>
-                  {card.company && (
-                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{card.company}</p>
-                  )}
-                  {card.title && (
-                    <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.title}</p>
-                  )}
-                  {card.department && (
-                    <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.department}</p>
-                  )}
-                </div>
-
-                {/* 連絡先 */}
-                <div className="space-y-0.5 min-w-0">
-                  {card.phone && (
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                      <Phone className="w-3 h-3 shrink-0" />
-                      <span className="truncate">{card.phone}</span>
-                    </div>
-                  )}
-                  {card.email && (
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                      <Mail className="w-3 h-3 shrink-0" />
-                      <span className="truncate">{card.email}</span>
-                    </div>
-                  )}
-                  {card.qualifications && (
-                    <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{card.qualifications}</p>
-                  )}
-                </div>
-
-                {/* バッジ */}
-                <div className="mt-auto pt-1 flex flex-wrap gap-1">
-                  <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
-                    {card.visibility === 'shared' ? '全社共有' : '個人'}
-                  </Badge>
-                  {/* (3) カテゴリバッジ */}
-                  {card.category && (
-                    <Badge tone="warning">
-                      <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
-                    </Badge>
-                  )}
-                </div>
-              </button>
+            {visibleCards.map((card) => (
+              <CardTile key={card.id} card={card} onClick={() => setSelectedCard(card)} />
             ))}
           </div>
         )}
@@ -768,6 +986,7 @@ export default function BusinessCardsPage({ onBack }) {
           onClose={() => setSelectedCard(null)}
           onEdit={(item) => setEditing(item)}
           onDeleted={loadCards}
+          onRefresh={loadCards}
           showToast={showToast}
         />
       )}
