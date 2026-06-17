@@ -208,6 +208,39 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
+  // (5) 業種カテゴリ自動提案
+  const [suggesting, setSuggesting] = useState(false)        // 提案問い合わせ中
+  const [suggestSource, setSuggestSource] = useState(null)   // 'existing' | 'researched' | null
+  const lastSuggestRef = useRef('')                          // 直前に問い合わせた会社名（二重防止）
+
+  // 会社名からカテゴリを自動提案。カテゴリ未入力のときだけ反映し、ユーザー入力は上書きしない。
+  const suggestCategory = async (companyRaw, { force = false } = {}) => {
+    const company = String(companyRaw || '').trim()
+    if (!company) return
+    if (!force && lastSuggestRef.current === company) return  // 同じ会社名は投げ直さない
+    lastSuggestRef.current = company
+    setSuggesting(true)
+    try {
+      const res = await axios.post(`${apiUrl}/api/cards/suggest-category`, { company }, authConfig())
+      const cat = res.data?.category
+      const source = res.data?.source
+      if (cat) {
+        let applied = false
+        setForm((prev) => {
+          if (prev.category && prev.category.trim()) return prev  // 既に入力あり → 尊重
+          applied = true
+          return { ...prev, category: cat }
+        })
+        // 反映できたときだけ提案元バッジを表示
+        if (applied) setSuggestSource(source === 'existing' || source === 'researched' ? source : null)
+      }
+    } catch {
+      // 提案失敗は黙って無視（手入力で対応可能）
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
   // (4) フォームを開く際にカテゴリ候補を取得
   useEffect(() => {
     axios.get(`${apiUrl}/api/cards/categories`, authConfig())
@@ -243,6 +276,8 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
         }
         return next
       })
+      // OCR で会社名が取れたら、そのままカテゴリも自動提案
+      if (fields.company) suggestCategory(fields.company)
       showToast('success', '名刺から情報を読み取りました。内容を確認してください')
     } catch (err) {
       showToast('error', err.response?.data?.error || '名刺の読み取りに失敗しました。手入力してください')
@@ -383,7 +418,7 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
             <input className={inputCls} value={form.full_name} onChange={(e) => set('full_name', e.target.value)} placeholder="例: 山田 太郎" />
           </Field>
           <Field label="会社名">
-            <input className={inputCls} value={form.company} onChange={(e) => set('company', e.target.value)} placeholder="例: 株式会社◯◯" />
+            <input className={inputCls} value={form.company} onChange={(e) => set('company', e.target.value)} onBlur={(e) => suggestCategory(e.target.value)} placeholder="例: 株式会社◯◯" />
           </Field>
           <Field label="部署">
             <input className={inputCls} value={form.department} onChange={(e) => set('department', e.target.value)} placeholder="例: 営業部" />
@@ -433,20 +468,43 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
           />
         </Field>
 
-        {/* (3) カテゴリ入力（datalist で既存候補表示 + 自由入力） */}
+        {/* (3) カテゴリ入力（datalist で既存候補表示 + 自由入力 + 業種自動提案） */}
         <Field label="カテゴリ">
-          <input
-            className={inputCls}
-            value={form.category}
-            onChange={(e) => set('category', e.target.value)}
-            list="card-category-list"
-            placeholder="例: 官公庁、協力会社（任意）"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              className={inputCls}
+              value={form.category}
+              onChange={(e) => { set('category', e.target.value); setSuggestSource(null) }}
+              list="card-category-list"
+              placeholder="例: 官公庁、協力会社（任意）"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => suggestCategory(form.company, { force: true })}
+              disabled={suggesting || !form.company.trim()}
+              title="会社名から業種を調べてカテゴリを提案します"
+            >
+              {suggesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              自動提案
+            </Button>
+          </div>
           <datalist id="card-category-list">
             {categoryOptions.map((opt) => (
               <option key={opt} value={opt} />
             ))}
           </datalist>
+          {suggesting && (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">会社名から業種を調べています...</p>
+          )}
+          {!suggesting && suggestSource && (
+            <p className="mt-1 text-xs text-brand-600 dark:text-brand-300">
+              {suggestSource === 'existing'
+                ? '✓ 同じ会社の既存名刺からカテゴリを引き継ぎました'
+                : '✓ 業種を調べてカテゴリを提案しました（内容を確認してください）'}
+            </p>
+          )}
         </Field>
 
         <Field label="公開範囲">
