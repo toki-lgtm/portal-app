@@ -161,7 +161,7 @@ function ProgressBar({ done, total }) {
 }
 
 export default function ConstructionPage({ onBack }) {
-  const [view, setView] = useState('list') // 'list' | 'detail'
+  const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist'
   const [projects, setProjects] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -317,6 +317,42 @@ export default function ConstructionPage({ onBack }) {
     )
   }
 
+  // ── チェックリストビュー（別画面）──
+  if (view === 'checklist') {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <button onClick={() => setView('detail')}
+          className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+          <ArrowLeft className="w-4 h-4" /> 工事詳細へ
+        </button>
+
+        {detailLoading || !detail ? (
+          <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+        ) : (
+          <ChecklistBody
+            detail={detail}
+            onReload={reloadDetail}
+            onEditDoc={(d) => setEditDoc(d)}
+            onAddDoc={() => setAddDocOpen(true)}
+            notify={notify}
+          />
+        )}
+
+        {editDoc && (
+          <EditDocModal doc={editDoc} onClose={() => setEditDoc(null)}
+            onSaved={() => { setEditDoc(null); reloadDetail(); notify('更新しました') }}
+            onError={(m) => notify(m, 'error')} />
+        )}
+        {addDocOpen && detail && (
+          <AddDocModal projectId={detail.id} onClose={() => setAddDocOpen(false)}
+            onAdded={() => { setAddDocOpen(false); reloadDetail(); notify('書類を追加しました') }}
+            onError={(m) => notify(m, 'error')} />
+        )}
+        <Toast toast={toast} />
+      </div>
+    )
+  }
+
   // ── 詳細ビュー ──
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
@@ -331,11 +367,10 @@ export default function ConstructionPage({ onBack }) {
         <DetailBody
           detail={detail}
           onReload={reloadDetail}
-          onEditDoc={(d) => setEditDoc(d)}
-          onAddDoc={() => setAddDocOpen(true)}
           isAdmin={isAdmin}
           onDelete={() => deleteProject(detail)}
           notify={notify}
+          onOpenChecklist={() => setView('checklist')}
         />
       )}
 
@@ -369,47 +404,11 @@ function KpiCard({ icon, label, value, tone }) {
 }
 
 // ── 詳細本体（工事メタ＋フェーズ別書類チェックリスト）──
-function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, notify }) {
+function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist }) {
   const docs = detail.documents || []
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
-  const [aiUploading, setAiUploading] = useState(false)
   const [reflectBusy, setReflectBusy] = useState(false)
   const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
-
-  const changeStatus = async (doc, status) => {
-    try {
-      await axios.patch(`${apiUrl}/api/construction/documents/${doc.id}`, { status }, authConfig())
-      onReload()
-    } catch (e) {
-      notify(e.response?.data?.error || 'ステータス更新に失敗しました', 'error')
-    }
-  }
-
-  // 書類をアップロード→Geminiが内容を読み取り、該当する提出書類へ自動で振り分けて添付
-  const onAiUpload = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setAiUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const token = localStorage.getItem('authToken')
-      const { data } = await axios.post(
-        `${apiUrl}/api/construction/projects/${detail.id}/documents/auto-file`, fd,
-        { headers: { Authorization: `Bearer ${token}` } })
-      const c = data.classification
-      const where = `${data.document.category_no}. ${data.document.category} ＞ ${data.document.doc_name}`
-      notify(c
-        ? `「${where}」に自動振り分けしました（確信度 ${Math.round((c.confidence || 0) * 100)}%）`
-        : `「${where}」に添付しました（AI判定なし。種別をご確認ください）`)
-      onReload()
-    } catch (err) {
-      notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
-    } finally {
-      setAiUploading(false)
-      e.target.value = ''
-    }
-  }
 
   // 契約書・設計図書をアップロード→AIが工事情報を読み取り→確認のうえ既存の工事内容へ反映
   const onContractReflect = async (e) => {
@@ -478,60 +477,27 @@ function DetailBody({ detail, onReload, onEditDoc, onAddDoc, isAdmin, onDelete, 
           <Meta label="現場代理人" value={detail.site_agent_name} />
           <Meta label="監理技術者" value={detail.chief_engineer_name} />
         </div>
-        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-ink-700">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 flex items-center gap-1">
-              <ListChecks className="w-4 h-4" /> 提出書類の進捗
-            </span>
-            <span className="text-xs text-slate-500">{done}/{docs.length} 完了</span>
-          </div>
-          <ProgressBar done={done} total={docs.length} />
-        </div>
       </Card>
 
       <BoqSection detail={detail} notify={notify} onReload={onReload} />
 
       <DesignChangeSection detail={detail} notify={notify} onReload={onReload} />
 
-      <div className="flex items-center justify-between mb-2 gap-3">
-        <h2 className="text-sm font-bold text-slate-700 dark:text-slate-200">提出書類チェックリスト</h2>
-        <div className="flex items-center gap-3 shrink-0">
-          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、該当する提出書類へ自動で振り分けます">
-            {aiUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            AIで振り分けアップロード
-            <input type="file" className="hidden" onChange={onAiUpload} disabled={aiUploading} />
-          </label>
-          <button onClick={onAddDoc} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
-            <Plus className="w-3.5 h-3.5" /> 書類を追加
-          </button>
+      {/* 提出書類チェックリストは別画面へ遷移 */}
+      <button onClick={onOpenChecklist}
+        className="w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">
+          <ListChecks className="w-5 h-5 text-brand-500" />
         </div>
-      </div>
-
-      {docs.length === 0 ? (
-        <Card className="text-center py-8 text-slate-500 dark:text-slate-400 text-sm">書類がありません。</Card>
-      ) : (
-        <div className="space-y-4">
-          {CATEGORIES.map((cat) => {
-            const rows = docs.filter((d) => d.category_no === cat.no)
-            if (rows.length === 0) return null
-            const catDone = rows.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
-            return (
-              <div key={cat.no}>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-xs font-bold text-white bg-brand-500 rounded-md w-5 h-5 flex items-center justify-center">{cat.no}</span>
-                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">{cat.name}</h3>
-                  <span className="text-xs text-slate-400">{catDone}/{rows.length}</span>
-                </div>
-                <div className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
-                  {rows.map((d) => (
-                    <DocRow key={d.id} doc={d} onChangeStatus={changeStatus} onEdit={() => onEditDoc(d)} />
-                  ))}
-                </div>
-              </div>
-            )
-          })}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">提出書類チェックリスト</span>
+            <span className="text-xs text-slate-500 shrink-0">{done}/{docs.length} 完了</span>
+          </div>
+          <div className="mt-1.5"><ProgressBar done={done} total={docs.length} /></div>
         </div>
-      )}
+        <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
+      </button>
 
       {reflect && (
         <ContractReflectModal
@@ -552,6 +518,123 @@ function Meta({ label, value }) {
     <div>
       <div className="text-[11px] text-slate-400">{label}</div>
       <div className="text-slate-800 dark:text-slate-200">{value || '—'}</div>
+    </div>
+  )
+}
+
+// ── 提出書類チェックリスト（別画面・カテゴリ別アコーディオン）──
+function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
+  const docs = detail.documents || []
+  const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
+  const [aiUploading, setAiUploading] = useState(false)
+  // 書類が1件以上あるカテゴリのみ表示
+  const cats = CATEGORIES.filter((cat) => docs.some((d) => d.category_no === cat.no))
+  // collapsed に入っている category_no は折りたたみ。既定は全展開。
+  const [collapsed, setCollapsed] = useState(() => new Set())
+  const toggleCat = (no) => setCollapsed((s) => { const n = new Set(s); n.has(no) ? n.delete(no) : n.add(no); return n })
+  const expandAll = () => setCollapsed(new Set())
+  const collapseAll = () => setCollapsed(new Set(cats.map((c) => c.no)))
+
+  const changeStatus = async (doc, status) => {
+    try {
+      await axios.patch(`${apiUrl}/api/construction/documents/${doc.id}`, { status }, authConfig())
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || 'ステータス更新に失敗しました', 'error')
+    }
+  }
+
+  // 書類をアップロード→Geminiが内容を読み取り、該当する提出書類へ自動で振り分けて添付
+  const onAiUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setAiUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('authToken')
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/documents/auto-file`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
+      const c = data.classification
+      const where = `${data.document.category_no}. ${data.document.category} ＞ ${data.document.doc_name}`
+      notify(c
+        ? `「${where}」に自動振り分けしました（確信度 ${Math.round((c.confidence || 0) * 100)}%）`
+        : `「${where}」に添付しました（AI判定なし。種別をご確認ください）`)
+      onReload()
+    } catch (err) {
+      notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
+    } finally {
+      setAiUploading(false)
+      e.target.value = ''
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <ListChecks className="w-5 h-5 text-brand-500" /> 提出書類チェックリスト
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、該当する提出書類へ自動で振り分けます">
+            {aiUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            AIで振り分けアップロード
+            <input type="file" className="hidden" onChange={onAiUpload} disabled={aiUploading} />
+          </label>
+          <button onClick={onAddDoc} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" /> 書類を追加
+          </button>
+        </div>
+      </div>
+
+      <Card className="px-4 py-3 mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">提出書類の進捗</span>
+          <span className="text-xs text-slate-500">{done}/{docs.length} 完了</span>
+        </div>
+        <ProgressBar done={done} total={docs.length} />
+      </Card>
+
+      {docs.length === 0 ? (
+        <Card className="text-center py-8 text-slate-500 dark:text-slate-400 text-sm">書類がありません。</Card>
+      ) : (
+        <>
+          <div className="flex items-center justify-end gap-2 text-[11px] text-slate-400 mb-2">
+            <button onClick={expandAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて展開</button>
+            <span>/</span>
+            <button onClick={collapseAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて折りたたむ</button>
+          </div>
+          <div className="space-y-3">
+            {cats.map((cat) => {
+              const rows = docs.filter((d) => d.category_no === cat.no)
+              const catDone = rows.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
+              const isOpen = !collapsed.has(cat.no)
+              return (
+                <div key={cat.no} className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+                  <button onClick={() => toggleCat(cat.no)}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
+                    <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                    <span className="text-xs font-bold text-white bg-brand-500 rounded-md w-5 h-5 flex items-center justify-center shrink-0">{cat.no}</span>
+                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left truncate">{cat.name}</h3>
+                    <span className="text-xs text-slate-400 shrink-0">{catDone}/{rows.length}</span>
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
+                      {rows.map((d) => (
+                        <DocRow key={d.id} doc={d} onChangeStatus={changeStatus} onEdit={() => onEditDoc(d)} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }
