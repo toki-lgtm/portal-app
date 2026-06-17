@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, Pencil, Trash2, X, Save, Search, Loader2,
   Camera, Upload, User, Building2, Phone, Mail, Sparkles, Tag,
+  LayoutGrid, Table2, ChevronUp, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -90,7 +91,7 @@ const inputCls = 'w-full px-3 py-2 rounded-xl border border-slate-200 dark:borde
 // ─────────────────────────────────────────────────────────
 // 名刺サムネイル
 // ─────────────────────────────────────────────────────────
-function CardThumb({ imageUrl, name }) {
+function CardThumb({ imageUrl, name, onZoom }) {
   if (imageUrl) {
     return (
       <img
@@ -98,13 +99,48 @@ function CardThumb({ imageUrl, name }) {
         alt={name || '名刺'}
         loading="lazy"
         decoding="async"
-        className="w-full h-28 object-cover rounded-xl bg-slate-100 dark:bg-ink-700"
+        onClick={onZoom ? (e) => { e.stopPropagation(); onZoom(imageUrl) } : undefined}
+        className={`w-full h-28 object-cover rounded-xl bg-slate-100 dark:bg-ink-700 ${onZoom ? 'cursor-zoom-in hover:opacity-90 transition' : ''}`}
       />
     )
   }
   return (
     <div className="w-full h-28 rounded-xl bg-slate-100 dark:bg-ink-700 flex items-center justify-center">
       <User className="w-10 h-10 text-slate-300 dark:text-ink-500" />
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+// 画像ライトボックス（拡大表示）
+// ※ 名刺画像の拡大用。背景クリック / Esc / × で閉じる（ライトボックスは例外的に背景クリック可）
+// ─────────────────────────────────────────────────────────
+function ImageLightbox({ url, onClose }) {
+  useEffect(() => {
+    if (!url) return
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [url, onClose])
+  if (!url) return null
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        aria-label="閉じる"
+        className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition"
+      >
+        <X className="w-6 h-6" />
+      </button>
+      <img
+        src={url}
+        alt="名刺拡大"
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+      />
     </div>
   )
 }
@@ -435,7 +471,7 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
 // ─────────────────────────────────────────────────────────
 // 詳細/編集モーダル
 // ─────────────────────────────────────────────────────────
-function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onDeleted, onRefresh, showToast }) {
+function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onDeleted, onRefresh, showToast, onZoom }) {
   const [deleting, setDeleting] = useState(false)
 
   const canEdit = isAdmin || card.owner_email === currentUserEmail
@@ -486,7 +522,7 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
       <div className="flex flex-col sm:flex-row gap-5">
         {/* 画像 */}
         <div className="sm:w-48 shrink-0">
-          <CardThumb imageUrl={card.image_url} name={card.full_name} />
+          <CardThumb imageUrl={card.image_url} name={card.full_name} onZoom={onZoom} />
           <div className="mt-2 flex flex-wrap justify-center gap-1">
             <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
               {card.visibility === 'shared' ? '全社共有' : '個人'}
@@ -691,6 +727,81 @@ function CardTile({ card, onClick }) {
   )
 }
 
+// ─────────────────────────────────────────────────────────
+// テーブル表示（ソート可能）
+// ─────────────────────────────────────────────────────────
+function SortHeader({ label, colKey, sortKey, sortDir, onSort, className = '' }) {
+  const active = sortKey === colKey
+  return (
+    <th className={`px-3 py-2 text-left font-semibold select-none ${className}`}>
+      <button
+        onClick={() => onSort(colKey)}
+        className={`inline-flex items-center gap-1 transition ${active ? 'text-brand-600 dark:text-brand-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
+      >
+        {label}
+        {active
+          ? (sortDir === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />)
+          : <ChevronsUpDown className="w-3.5 h-3.5 opacity-40" />}
+      </button>
+    </th>
+  )
+}
+
+function CardTable({ rows, sortKey, sortDir, onSort, catOf, onRowClick, onZoom }) {
+  const headProps = { sortKey, sortDir, onSort }
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-900/50">
+            <th className="px-3 py-2 w-12"></th>
+            <SortHeader label="氏名" colKey="full_name" {...headProps} />
+            <SortHeader label="会社" colKey="company" {...headProps} />
+            <th className="px-3 py-2 text-left font-semibold text-slate-500 dark:text-slate-400">部署・役職</th>
+            <SortHeader label="カテゴリ" colKey="category" {...headProps} />
+            <th className="px-3 py-2 text-left font-semibold text-slate-500 dark:text-slate-400">連絡先</th>
+            <SortHeader label="登録日" colKey="created" {...headProps} />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((card) => (
+            <tr
+              key={card.id}
+              onClick={() => onRowClick(card)}
+              className="border-b border-slate-100 dark:border-ink-700/60 hover:bg-brand-50 dark:hover:bg-ink-700/50 cursor-pointer transition"
+            >
+              <td className="px-3 py-2">
+                {card.image_url
+                  ? <img
+                      src={card.image_url}
+                      alt=""
+                      loading="lazy"
+                      onClick={(e) => { e.stopPropagation(); onZoom?.(card.image_url) }}
+                      className="w-10 h-7 object-cover rounded border border-slate-200 dark:border-ink-600 cursor-zoom-in hover:opacity-80 transition"
+                    />
+                  : <div className="w-10 h-7 rounded bg-slate-100 dark:bg-ink-700 flex items-center justify-center"><User className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600" /></div>}
+              </td>
+              <td className="px-3 py-2 font-semibold text-slate-800 dark:text-slate-100 whitespace-nowrap">{card.full_name || <span className="text-slate-300 dark:text-slate-600">—</span>}</td>
+              <td className="px-3 py-2 text-slate-700 dark:text-slate-300">{card.company || ''}</td>
+              <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs">{[card.department, card.title].filter(Boolean).join(' / ')}</td>
+              <td className="px-3 py-2">
+                {catOf(card)
+                  ? <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300"><Tag className="w-3 h-3" />{catOf(card)}</span>
+                  : <span className="text-slate-300 dark:text-slate-600 text-xs">未分類</span>}
+              </td>
+              <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">
+                {(card.phone || card.mobile) && <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{card.phone || card.mobile}</div>}
+                {card.email && <div className="flex items-center gap-1 truncate max-w-[180px]"><Mail className="w-3 h-3" />{card.email}</div>}
+              </td>
+              <td className="px-3 py-2 text-slate-400 dark:text-slate-500 text-xs whitespace-nowrap">{fmtDate(card.created_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // 未分類グループ用のラベル（カテゴリ未設定の名刺をまとめる）
 const UNCATEGORIZED = '__uncat__'
 
@@ -710,6 +821,12 @@ export default function BusinessCardsPage({ onBack }) {
   const [toast, setToast] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [currentUserEmail, setCurrentUserEmail] = useState('')
+  // 表示モード（カード/テーブル）＋ ソート
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('cardsViewMode') || 'card')
+  const [sortKey, setSortKey] = useState('created') // 'created'|'full_name'|'company'|'category'
+  const [sortDir, setSortDir] = useState('desc')     // 'asc'|'desc'
+  const [lightboxUrl, setLightboxUrl] = useState(null) // 名刺画像の拡大表示
+  useEffect(() => { localStorage.setItem('cardsViewMode', viewMode) }, [viewMode])
 
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg })
@@ -765,6 +882,29 @@ export default function BusinessCardsPage({ onBack }) {
     [categoryAxis],
   )
 
+  // ソート（カード/テーブル両ビューに適用）
+  const sortCards = useCallback((arr) => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...arr].sort((a, b) => {
+      if (sortKey === 'created') return (new Date(a.created_at || 0) - new Date(b.created_at || 0)) * dir
+      const va = sortKey === 'category' ? catOf(a) : (a[sortKey] || '')
+      const vb = sortKey === 'category' ? catOf(b) : (b[sortKey] || '')
+      if (!va && vb) return 1            // 空欄は常に末尾
+      if (va && !vb) return -1
+      if (!va && !vb) return 0
+      return va.localeCompare(vb, 'ja') * dir
+    })
+  }, [sortKey, sortDir, catOf])
+
+  // 列ヘッダークリック: 同じ列なら昇順/降順トグル、別列なら既定方向で切替
+  const handleSort = useCallback((key) => {
+    setSortKey((prev) => {
+      if (prev === key) { setSortDir((d) => (d === 'asc' ? 'desc' : 'asc')); return prev }
+      setSortDir(key === 'created' ? 'desc' : 'asc')
+      return key
+    })
+  }, [])
+
   // 現在読み込んでいる名刺から、選択中の軸で存在するカテゴリ一覧（件数付き）を導出
   const { catList, uncatCount } = useMemo(() => {
     const counts = new Map()
@@ -780,12 +920,13 @@ export default function BusinessCardsPage({ onBack }) {
     return { catList: list, uncatCount: uncat }
   }, [cards, catOf])
 
-  // カテゴリ絞り込みを適用した表示対象
+  // カテゴリ絞り込みを適用した表示対象（ソート済み）
   const visibleCards = useMemo(() => {
-    if (categoryFilter === 'all') return cards
-    if (categoryFilter === UNCATEGORIZED) return cards.filter((c) => !catOf(c))
-    return cards.filter((c) => catOf(c) === categoryFilter)
-  }, [cards, categoryFilter, catOf])
+    let arr = cards
+    if (categoryFilter === UNCATEGORIZED) arr = cards.filter((c) => !catOf(c))
+    else if (categoryFilter !== 'all') arr = cards.filter((c) => catOf(c) === categoryFilter)
+    return sortCards(arr)
+  }, [cards, categoryFilter, catOf, sortCards])
 
   // 「すべて」表示時はカテゴリごとにグループ分けする（分けない場合は null）
   const groups = useMemo(() => {
@@ -793,17 +934,17 @@ export default function BusinessCardsPage({ onBack }) {
     const g = catList.map((c) => ({
       key: c.name,
       label: c.name,
-      items: cards.filter((card) => catOf(card) === c.name),
+      items: sortCards(cards.filter((card) => catOf(card) === c.name)),
     }))
     if (uncatCount > 0) {
       g.push({
         key: UNCATEGORIZED,
         label: '未分類',
-        items: cards.filter((card) => !catOf(card)),
+        items: sortCards(cards.filter((card) => !catOf(card))),
       })
     }
     return g
-  }, [cards, catList, uncatCount, categoryFilter, catOf])
+  }, [cards, catList, uncatCount, categoryFilter, catOf, sortCards])
 
   // 軸を切り替えたら絞り込みを「すべて」に戻す
   useEffect(() => { setCategoryFilter('all') }, [categoryAxis])
@@ -866,6 +1007,47 @@ export default function BusinessCardsPage({ onBack }) {
                 {opt.label}
               </button>
             ))}
+          </div>
+
+          {/* ソート選択 */}
+          <select
+            value={`${sortKey}:${sortDir}`}
+            onChange={(e) => { const [k, d] = e.target.value.split(':'); setSortKey(k); setSortDir(d) }}
+            className="px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
+            title="並べ替え"
+          >
+            <option value="created:desc">登録日（新しい順）</option>
+            <option value="created:asc">登録日（古い順）</option>
+            <option value="full_name:asc">氏名（あ→ん）</option>
+            <option value="full_name:desc">氏名（ん→あ）</option>
+            <option value="company:asc">会社（あ→ん）</option>
+            <option value="company:desc">会社（ん→あ）</option>
+            <option value="category:asc">カテゴリ（あ→ん）</option>
+          </select>
+
+          {/* 表示モード切替（カード / テーブル） */}
+          <div className="flex rounded-xl border border-slate-200 dark:border-ink-600 overflow-hidden bg-white dark:bg-ink-700">
+            {[
+              { value: 'card', icon: LayoutGrid, label: 'カード' },
+              { value: 'table', icon: Table2, label: 'テーブル' },
+            ].map((opt) => {
+              const Icon = opt.icon
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setViewMode(opt.value)}
+                  title={`${opt.label}表示`}
+                  className={`px-3 py-2 text-sm font-semibold transition flex items-center gap-1
+                    ${viewMode === opt.value
+                      ? 'bg-brand-600 text-white'
+                      : 'text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-ink-600'
+                    }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden sm:inline">{opt.label}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
 
@@ -945,6 +1127,20 @@ export default function BusinessCardsPage({ onBack }) {
               <p className="text-xs mt-1">条件を変えて検索してみてください</p>
             )}
           </div>
+        ) : viewMode === 'table' ? (
+          /* テーブル表示: 常にフラット（ソート済み visibleCards）。件数を上部に表示 */
+          <div>
+            <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mb-2">{visibleCards.length}件</div>
+            <CardTable
+              rows={visibleCards}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={handleSort}
+              catOf={catOf}
+              onRowClick={setSelectedCard}
+              onZoom={setLightboxUrl}
+            />
+          </div>
         ) : groups ? (
           /* 「すべて」表示: カテゴリごとにセクション分けして表示 */
           <div className="space-y-8">
@@ -990,8 +1186,12 @@ export default function BusinessCardsPage({ onBack }) {
           onDeleted={loadCards}
           onRefresh={loadCards}
           showToast={showToast}
+          onZoom={setLightboxUrl}
         />
       )}
+
+      {/* 画像ライトボックス（拡大） */}
+      <ImageLightbox url={lightboxUrl} onClose={() => setLightboxUrl(null)} />
 
       {/* 登録/編集フォームモーダル */}
       {editing !== null && (
