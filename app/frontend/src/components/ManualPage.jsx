@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
+import axios from 'axios'
 import {
   ArrowLeft, Search, BookOpen, LogIn, LayoutDashboard, Settings,
   ShieldCheck, Users, Megaphone, Gavel, Building2, FolderOpen,
@@ -6,6 +7,8 @@ import {
 } from 'lucide-react'
 import Button from './ui/Button'
 import Badge from './ui/Badge'
+
+const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
 /**
  * 社内ポータル操作マニュアル（読み取り専用の静的ページ）。
@@ -490,6 +493,43 @@ const MANUAL = [
   },
 ]
 
+// 章ID → 対応するアプリの app_key。ここに無い章（はじめに/ダッシュボード/個人設定/FAQ）は
+// 全社員共通として常に表示する。app_key は /api/apps・app_permissions のキーと一致させる。
+const SECTION_APP = {
+  'safety-patrol': 'safety-patrol',
+  employees: 'employee-list',
+  announcements: 'announcements',
+  bids: 'bids',
+  construction: 'construction',
+  documents: 'documents',
+  cards: 'cards',
+  workscope: 'workscope',
+  feedback: 'feedback',
+}
+
+// 権限に関わらず全社員に見せるアプリ（バックエンド /api/apps の常時表示と揃える）。
+// workscope=全社配布、feedback=報告は全社員が可能（一覧のみ管理者）、manual=このマニュアル自体。
+const ALWAYS_VISIBLE_APPS = new Set(['workscope', 'feedback', 'manual'])
+
+// 取得失敗時のフォールバック（最小権限＝一般社員扱い）。
+const FALLBACK_PERMS = { role: 'member', safety_patrol_role: 'none', apps: {} }
+
+// この章を表示してよいか。ダッシュボードのアプリ表示と同じ基準。
+function canSeeSection(section, perms) {
+  const app = SECTION_APP[section.id]
+  if (!app) return true // 全社員共通の章
+  if (ALWAYS_VISIBLE_APPS.has(app)) return true
+  if (perms.role === 'admin') return true // グローバル管理者は全件
+  return !!perms.apps?.[app]
+}
+
+// このアプリの「管理者のみ」節を表示してよいか。
+function isAdminFor(appKey, perms) {
+  if (perms.role === 'admin') return true
+  if (appKey === 'safety-patrol' && perms.safety_patrol_role === 'admin') return true
+  return perms.apps?.[appKey] === 'admin'
+}
+
 // 章が検索語に一致するか（タイトル・概要・項目本文を対象）
 function matchSection(section, q) {
   if (!q) return true
@@ -505,11 +545,31 @@ function matchSection(section, q) {
 
 export default function ManualPage({ onBack }) {
   const [query, setQuery] = useState('')
+  // 自分の権限。null=取得中。取得後に章・節を絞り込む。
+  const [perms, setPerms] = useState(null)
   const sectionRefs = useRef({})
 
+  // 自分の権限を取得（失敗時は最小権限でフォールバック）
+  useEffect(() => {
+    const token = localStorage.getItem('authToken')
+    axios
+      .get(`${apiUrl}/api/my-permissions`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => setPerms(res.data || FALLBACK_PERMS))
+      .catch(() => setPerms(FALLBACK_PERMS))
+  }, [])
+
+  // 権限に応じて表示章を絞り、各章の「管理者のみ」節も権限で除外する
+  const myManual = useMemo(() => {
+    if (!perms) return []
+    return MANUAL.filter((s) => canSeeSection(s, perms)).map((s) => ({
+      ...s,
+      groups: s.groups.filter((g) => !g.admin || isAdminFor(SECTION_APP[s.id], perms)),
+    }))
+  }, [perms])
+
   const visible = useMemo(
-    () => MANUAL.filter((s) => matchSection(s, query.trim())),
-    [query]
+    () => myManual.filter((s) => matchSection(s, query.trim())),
+    [myManual, query]
   )
 
   const scrollTo = (id) => {
@@ -571,7 +631,14 @@ export default function ManualPage({ onBack }) {
 
           {/* 本文 */}
           <div className="flex-1 min-w-0 space-y-6">
-            {visible.length === 0 && (
+            {!perms && (
+              <div className="text-center py-20">
+                <div className="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-brand-600" />
+                <p className="text-slate-500 dark:text-slate-400 mt-4">読み込み中...</p>
+              </div>
+            )}
+
+            {perms && visible.length === 0 && (
               <div className="text-center py-20 text-slate-400 dark:text-slate-500">
                 「{query}」に一致する項目は見つかりませんでした。
               </div>
