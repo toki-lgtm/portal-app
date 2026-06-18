@@ -40,6 +40,7 @@ import RegulationsPage from './components/RegulationsPage'
 import BusinessCardsPage from './components/BusinessCardsPage'
 import ManualPage from './components/ManualPage'
 import { applyTheme, loadTheme } from './lib/theme'
+import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
 const ICON_TONES = [
@@ -105,7 +106,7 @@ function LoginPage({ onLoginSuccess }) {
       setIsLoading(true)
       try {
         const response = await axios.post(
-          `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/api/auth/google`,
+          `${apiUrl}/api/auth/google`,
           { token: credentialResponse.access_token }
         )
         const { token, ...user } = response.data
@@ -400,7 +401,6 @@ function AnnouncementsCard({ onOpenAnnouncements }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
     const token = localStorage.getItem('authToken')
     const fetchAnnouncements = async () => {
       try {
@@ -492,7 +492,6 @@ function DocumentsCard({ onOpenDocuments }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
     const token = localStorage.getItem('authToken')
     const fetch_ = async () => {
       try {
@@ -647,7 +646,6 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
   // keepalive: 外部リンクでページ遷移してもリクエストを生存させる。失敗は無視（並び替えの補助情報のため）。
   const recordAppUsage = (key) => {
     if (!key) return
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
     const token = localStorage.getItem('authToken')
     fetch(`${apiUrl}/api/apps/usage`, {
       method: 'POST',
@@ -980,13 +978,9 @@ function AppContent() {
       return
     }
 
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-    const token = localStorage.getItem('authToken')
-    const authConfig = { headers: { Authorization: `Bearer ${token}` } }
-
     const fetchApps = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/apps`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/apps`, makeAuthConfig())
         setApps(response.data)
       } catch (error) {
         console.error('Failed to fetch apps:', error)
@@ -1002,7 +996,7 @@ function AppContent() {
     // 統計は補助情報。失敗してもアプリ一覧の表示は妨げない
     const fetchStats = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/dashboard/stats`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/dashboard/stats`, makeAuthConfig())
         setStats(response.data)
       } catch (error) {
         console.error('Failed to fetch dashboard stats:', error)
@@ -1012,7 +1006,7 @@ function AppContent() {
     // ユーザー設定を取得。失敗時はデフォルト値でフォールバック
     const fetchUserSettings = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/user/settings`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/user/settings`, makeAuthConfig())
         setServerSettings(response.data)
       } catch (error) {
         console.error('Failed to fetch user settings:', error)
@@ -1024,7 +1018,7 @@ function AppContent() {
     // 未読お知らせ数を取得。失敗しても既存表示に影響させない
     const fetchAnnouncementUnreadCount = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/announcements/unread-count`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/announcements/unread-count`, makeAuthConfig())
         setAnnouncementUnreadCount(response.data?.count || 0)
       } catch {
         setAnnouncementUnreadCount(0)
@@ -1034,7 +1028,7 @@ function AppContent() {
     // 未読文書回覧数を取得。失敗しても既存表示に影響させない
     const fetchDocumentsUnreadCount = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/circulars/inbox-count`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/circulars/inbox-count`, makeAuthConfig())
         setDocumentsUnreadCount(response.data?.unread || 0)
       } catch {
         setDocumentsUnreadCount(0)
@@ -1044,7 +1038,7 @@ function AppContent() {
     // 入札KPI。アクセス権がない場合は403で失敗するので静かに非表示（null のまま）
     const fetchBidStats = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/bids/stats`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/bids/stats`, makeAuthConfig())
         setBidStats(response.data)
       } catch {
         setBidStats(null)
@@ -1054,7 +1048,7 @@ function AppContent() {
     // バグ報告・改善の利用権限を取得（FAB表示判定）
     const fetchMyPerms = async () => {
       try {
-        const response = await axios.get(`${apiUrl}/api/my-permissions`, authConfig)
+        const response = await axios.get(`${apiUrl}/api/my-permissions`, makeAuthConfig())
         setCanReportFeedback(response.data?.role === 'admin' || !!response.data?.apps?.feedback)
       } catch {
         setCanReportFeedback(false)
@@ -1119,7 +1113,6 @@ function AppContent() {
         onBack={() => setView('dashboard')}
         onCountChange={() => {
           // 文書回覧から戻ったときに未読数を再取得
-          const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
           const token = localStorage.getItem('authToken')
           fetch(`${apiUrl}/api/circulars/inbox-count`, {
             headers: { Authorization: `Bearer ${token}` },

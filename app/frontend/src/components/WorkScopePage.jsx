@@ -8,13 +8,7 @@ import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import { EULA_VERSION } from '../lib/workscopeEula'
-
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-
-function authConfig() {
-  const token = localStorage.getItem('authToken')
-  return { headers: { Authorization: `Bearer ${token}` } }
-}
+import { API_URL as apiUrl, authConfig } from '../lib/api'
 
 function fmtDateTime(d) {
   if (!d) return ''

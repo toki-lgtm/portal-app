@@ -3,13 +3,7 @@ import axios from 'axios'
 import { Monitor, Download, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react'
 import Button from './ui/Button'
 import { EULA_TEXT, EULA_VERSION } from '../lib/workscopeEula'
-
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-
-function authConfig() {
-  const token = localStorage.getItem('authToken')
-  return { headers: { Authorization: `Bearer ${token}` } }
-}
+import { API_URL as apiUrl, authConfig } from '../lib/api'
 
 // 導入手順（ダウンロード前から案内する）
 const INSTALL_STEPS = [

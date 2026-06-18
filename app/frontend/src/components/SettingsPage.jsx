@@ -12,7 +12,9 @@ import {
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
+import Toast from './ui/Toast'
 import { saveTheme, loadTheme } from '../lib/theme'
+import { API_URL as apiUrl } from '../lib/api'
 
 // 曜日ラベル（0=日〜6=土、JS の getDay() と同じ）
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
@@ -26,7 +28,6 @@ const HOUR_OPTIONS = Array.from({ length: 15 }, (_, i) => i + 6)
  * サーバー設定（アプリカスタム/通知）はまとめて PUT で保存。
  */
 export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }) {
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 
   // --- ブラウザ設定 ---
   const [theme, setTheme] = useState(() => loadTheme())
@@ -210,17 +211,7 @@ export default function SettingsPage({ onBack, apps: rawApps, onSettingsChange }
       </header>
 
       {/* トースト */}
-      {toast && (
-        <div
-          className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-semibold transition-all
-            ${toast.type === 'success'
-              ? 'bg-success-100 dark:bg-success-500/20 text-success-700 dark:text-success-300 border border-success-200 dark:border-success-500/30'
-              : 'bg-danger-100 dark:bg-danger-500/20 text-danger-700 dark:text-danger-300 border border-danger-200 dark:border-danger-500/30'
-            }`}
-        >
-          {toast.msg}
-        </div>
-      )}
+      {toast && <Toast toast={toast} />}
 
       <main className="max-w-3xl mx-auto px-6 py-10 space-y-6">
 

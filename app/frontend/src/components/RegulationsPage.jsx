@@ -8,14 +8,10 @@ import {
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
-
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-
-// 認証付き axios 設定
-function authConfig() {
-  const token = localStorage.getItem('authToken')
-  return { headers: { Authorization: `Bearer ${token}` } }
-}
+import Toast from './ui/Toast'
+import ModalShell from './ui/ModalShell'
+import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { inputCls } from '../lib/ui'
 
 // 日付フォーマット（YYYY/M/D）
 function fmtDate(d) {
@@ -26,51 +22,8 @@ function fmtDate(d) {
 }
 
 // ──────────────────────────────────────────────
-// Toast 通知
+// 入力スタイル共通（inputClsはlib/ui.jsからimport済み）
 // ──────────────────────────────────────────────
-function Toast({ toast }) {
-  return (
-    <div
-      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-semibold
-        ${toast.type === 'success'
-          ? 'bg-success-100 dark:bg-success-500/20 text-success-700 dark:text-success-300 border border-success-200 dark:border-success-500/30'
-          : 'bg-danger-100 dark:bg-danger-500/20 text-danger-700 dark:text-danger-300 border border-danger-200 dark:border-danger-500/30'
-        }`}
-    >
-      {toast.msg}
-    </div>
-  )
-}
-
-// ──────────────────────────────────────────────
-// モーダルシェル（背景クリックでは閉じない）
-// ──────────────────────────────────────────────
-function ModalShell({ title, onClose, children, wide }) {
-  return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
-      <div
-        className={`bg-white dark:bg-ink-800 rounded-2xl shadow-xl border border-slate-200 dark:border-ink-700 w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} my-8`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-ink-700 sticky top-0 bg-white dark:bg-ink-800 rounded-t-2xl z-10">
-          <h2 className="text-base font-bold text-slate-900 dark:text-white">{title}</h2>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-6 py-5">{children}</div>
-      </div>
-    </div>
-  )
-}
-
-// ──────────────────────────────────────────────
-// 入力スタイル共通
-// ──────────────────────────────────────────────
-const inputCls = 'w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:opacity-60'
 
 // ──────────────────────────────────────────────
 // キーワードハイライト（スニペット中のキーワードを強調）
@@ -199,7 +152,7 @@ function RevisionsModal({ lawId, lawTitle, onClose }) {
   }, [lawId])
 
   return (
-    <ModalShell title={`改正履歴 — ${lawTitle}`} onClose={onClose} wide>
+    <ModalShell title={`改正履歴 — ${lawTitle}`} onClose={onClose} maxWidthOverride="max-w-2xl">
       {loading ? (
         <div className="py-10 text-center text-slate-400">
           <Loader2 className="w-6 h-6 animate-spin inline" />
