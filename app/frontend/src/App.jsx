@@ -21,6 +21,7 @@ import {
   Trophy,
   Bug,
   FolderOpen,
+  BookOpen,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -37,6 +38,7 @@ import WorkScopePage from './components/WorkScopePage'
 import WorkScopeGate from './components/WorkScopeGate'
 import RegulationsPage from './components/RegulationsPage'
 import BusinessCardsPage from './components/BusinessCardsPage'
+import ManualPage from './components/ManualPage'
 import { applyTheme, loadTheme } from './lib/theme'
 
 // アプリカードのアイコン地色（トークンを順番に巡回して彩りを出す）
@@ -695,6 +697,16 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
 
             <ThemeToggle />
 
+            {/* マニュアルボタン */}
+            <button
+              onClick={() => onOpenInternal?.('manual')}
+              aria-label="操作マニュアル"
+              title="操作マニュアル"
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-800 transition"
+            >
+              <BookOpen className="w-5 h-5" />
+            </button>
+
             {/* 設定ボタン */}
             <button
               onClick={onOpenSettings}
@@ -921,7 +933,7 @@ function AppContent() {
   const [documentsUnreadCount, setDocumentsUnreadCount] = useState(0)
   // バグ報告・改善の利用権限（FAB表示判定。member 以上で報告可）
   const [canReportFeedback, setCanReportFeedback] = useState(false)
-  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents' | 'workscope' | 'regulations' | 'cards'
+  // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents' | 'workscope' | 'regulations' | 'cards' | 'manual'
   const [view, setView] = useState('dashboard')
   // フィードバック画面を「投稿フォーム直開き(FAB経由)」か「一覧(管理カード経由)」かで切り替える
   const [feedbackSubmitFirst, setFeedbackSubmitFirst] = useState(false)
@@ -1126,6 +1138,8 @@ function AppContent() {
     page = <RegulationsPage onBack={() => setView('dashboard')} />
   } else if (view === 'cards') {
     page = <BusinessCardsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'manual') {
+    page = <ManualPage onBack={() => setView('dashboard')} />
   } else {
     page = (
       <DashboardPage
