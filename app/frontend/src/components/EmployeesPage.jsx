@@ -23,7 +23,7 @@ const APP_LABELS = {
   'feedback': 'バグ報告・改善 一覧',
   'workscope': 'WorkScope導入',
   'construction': '工事管理',
-  'regulations': '法令集',
+  'cards': '名刺管理',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
