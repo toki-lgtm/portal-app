@@ -3,11 +3,12 @@
 //   P0 範囲: プロジェクト一覧/作成・原本数量書取込（boqParser）・業者追加＋6類型自動分類＋
 //            人による確認/上書き（書式軸×媒体軸トグル）。
 //   ※ Excel直読抽出・PDFキュー抽出・横並び比較・最安・書き戻しは P1 以降で追加する。
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Loader2, Upload, Trash2, FileSpreadsheet,
   Building2, AlertTriangle, CheckCircle2, Layers, FileText, Download,
+  BarChart3, ChevronRight, ChevronDown,
 } from 'lucide-react'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
@@ -171,6 +172,7 @@ export default function QuoteComparePage({ onBack }) {
   const [detail, setDetail] = useState(null)   // 選択中プロジェクト（業者含む）
   const [tab, setTab] = useState('boq')         // 'boq' | 'vendors'
   const [boq, setBoq] = useState(null)          // { rows, total, imported_at, template_filename }
+  const [comparison, setComparison] = useState(null)  // { vendors, summary, detailByKamoku, totals }
   const [busy, setBusy] = useState(false)
 
   const [showNew, setShowNew] = useState(false)
@@ -195,12 +197,14 @@ export default function QuoteComparePage({ onBack }) {
   const openDetail = useCallback(async (id) => {
     setBusy(true)
     try {
-      const [{ data: d }, { data: b }] = await Promise.all([
+      const [{ data: d }, { data: b }, { data: cmp }] = await Promise.all([
         axios.get(`${apiUrl}/api/quote-compare/projects/${id}`, authConfig()),
         axios.get(`${apiUrl}/api/quote-compare/projects/${id}/boq`, authConfig()),
+        axios.get(`${apiUrl}/api/quote-compare/projects/${id}/comparison`, authConfig()),
       ])
       setDetail(d)
       setBoq(b)
+      setComparison(cmp)
       setTab('boq')
     } catch (e) {
       showToast('error', e.response?.data?.error || '詳細の取得に失敗しました')
@@ -212,12 +216,14 @@ export default function QuoteComparePage({ onBack }) {
   const refreshDetail = useCallback(async () => {
     if (!detail) return
     try {
-      const [{ data: d }, { data: b }] = await Promise.all([
+      const [{ data: d }, { data: b }, { data: cmp }] = await Promise.all([
         axios.get(`${apiUrl}/api/quote-compare/projects/${detail.id}`, authConfig()),
         axios.get(`${apiUrl}/api/quote-compare/projects/${detail.id}/boq`, authConfig()),
+        axios.get(`${apiUrl}/api/quote-compare/projects/${detail.id}/comparison`, authConfig()),
       ])
       setDetail(d)
       setBoq(b)
+      setComparison(cmp)
     } catch { /* noop */ }
   }, [detail])
 
@@ -436,10 +442,11 @@ export default function QuoteComparePage({ onBack }) {
       <div className="text-sm text-slate-500 mb-4">{detail.client || '発注者未設定'}</div>
 
       {/* KPI */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <KPI label="業者数" value={`${vendors.length} 社`} />
-        <KPI label="直接工事費" value={yen(detail.boq_total)} />
         <KPI label="BOQ行数" value={`${detail.boq_row_count ?? 0} 行`} />
+        <KPI label="最安総額" value={comparison?.totals?.cheapest_total ? yen(comparison.totals.cheapest_total) : '—'} />
+        <KPI label="直接工事費" value={detail.boq_total ? yen(detail.boq_total) : '—'} />
       </div>
 
       {/* タブ */}
@@ -447,6 +454,7 @@ export default function QuoteComparePage({ onBack }) {
         {[
           { key: 'boq', label: '数量書', icon: Layers },
           { key: 'vendors', label: `業者・分類${vendors.length ? `（${vendors.length}）` : ''}`, icon: FileText },
+          { key: 'compare', label: '比較', icon: BarChart3 },
         ].map((t) => (
           <button
             key={t.key}
@@ -521,6 +529,8 @@ export default function QuoteComparePage({ onBack }) {
         </div>
       )}
 
+      {tab === 'compare' && <ComparisonView comparison={comparison} />}
+
       {showAddVendor && <AddVendorModal busy={busy} onClose={() => setShowAddVendor(false)} onSubmit={addVendor} />}
     </div>
   )
@@ -571,6 +581,124 @@ function BoqPreview({ rows }) {
           {open ? '折りたたむ' : `すべて表示（残り ${rows.length - 30} 行）`}
         </button>
       )}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// タブ3 比較: 科目サマリー → 細目ドリル。最安は黄ハイライト（築城と統一）。
+const MIN_CELL = 'bg-warning-100 dark:bg-warning-500/20 font-bold text-slate-900 dark:text-warning-200'
+
+function ComparisonView({ comparison }) {
+  const [open, setOpen] = useState({})
+  if (!comparison) return <div className="text-center text-slate-400 text-sm py-12">読込中…</div>
+  const vendors = comparison.vendors || []
+  const summary = comparison.summary || []
+  const totals = comparison.totals || { byVendor: {}, cheapest_total: 0 }
+  const detailByKamoku = comparison.detailByKamoku || {}
+  if (!summary.length) {
+    return (
+      <div className="text-center text-slate-400 text-sm py-12 border border-dashed border-slate-200 dark:border-ink-700 rounded-2xl">
+        まだ比較できる単価がありません。「業者・分類」タブで各社の見積を「抽出」してください。
+      </div>
+    )
+  }
+  const toggle = (p) => setOpen((o) => ({ ...o, [p]: !o[p] }))
+
+  return (
+    <div>
+      {/* 総額バー（公式数量×各社単価） */}
+      <div className="rounded-2xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 p-4 mb-4 overflow-x-auto">
+        <table className="text-sm w-full">
+          <thead className="text-slate-500">
+            <tr>
+              <th className="text-left font-semibold px-2 py-1 whitespace-nowrap">総額（公式数量×単価）</th>
+              {vendors.map((v) => <th key={v.id} className="text-right font-semibold px-2 py-1 whitespace-nowrap">{v.name}</th>)}
+              <th className="text-right font-semibold px-2 py-1 whitespace-nowrap">最安総額</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="px-2 py-1 text-slate-400 whitespace-nowrap">合計</td>
+              {vendors.map((v) => <td key={v.id} className="text-right px-2 py-1 whitespace-nowrap text-slate-700 dark:text-slate-300">{totals.byVendor[v.id] ? yen(totals.byVendor[v.id]) : '—'}</td>)}
+              <td className={`text-right px-2 py-1 whitespace-nowrap rounded ${MIN_CELL}`}>{yen(totals.cheapest_total)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* 科目サマリー（▶で細目マトリクスへドリル） */}
+      <div className="rounded-2xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 dark:bg-ink-900 text-slate-500">
+              <tr>
+                <th className="text-left font-semibold px-3 py-2 whitespace-nowrap">科目（工種）</th>
+                {vendors.map((v) => <th key={v.id} className="text-right font-semibold px-3 py-2 whitespace-nowrap">{v.name}</th>)}
+                <th className="text-right font-semibold px-3 py-2 whitespace-nowrap">最安小計</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((s) => {
+                const activeVendors = vendors.filter((v) => s.byVendor[v.id] != null)
+                const dets = detailByKamoku[s.path] || []
+                return (
+                  <Fragment key={s.path}>
+                    <tr className="border-t border-slate-100 dark:border-ink-700 hover:bg-slate-50 dark:hover:bg-ink-700/50 cursor-pointer" onClick={() => toggle(s.path)}>
+                      <td className="px-3 py-2 font-semibold text-slate-800 dark:text-slate-100 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          {open[s.path] ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
+                          {s.item_name}
+                          <span className="text-xs text-slate-400 font-normal">（{s.detail_count}）</span>
+                        </span>
+                      </td>
+                      {vendors.map((v) => (
+                        <td key={v.id} className={`text-right px-3 py-2 whitespace-nowrap ${s.min_vendor === v.id ? MIN_CELL : 'text-slate-600 dark:text-slate-300'}`}>
+                          {s.byVendor[v.id] != null ? yen(s.byVendor[v.id]) : '—'}
+                        </td>
+                      ))}
+                      <td className="text-right px-3 py-2 whitespace-nowrap text-slate-500">{yen(s.min_total)}</td>
+                    </tr>
+                    {open[s.path] && (
+                      <tr className="bg-slate-50/50 dark:bg-ink-900/40">
+                        <td className="px-2 py-2" colSpan={vendors.length + 2}>
+                          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-ink-700">
+                            <table className="w-full text-xs">
+                              <thead className="bg-white dark:bg-ink-800 text-slate-400">
+                                <tr>
+                                  <th className="text-left font-semibold px-2 py-1 whitespace-nowrap">細目</th>
+                                  <th className="text-right font-semibold px-2 py-1 whitespace-nowrap">数量</th>
+                                  <th className="text-left font-semibold px-2 py-1 whitespace-nowrap">単位</th>
+                                  {activeVendors.map((v) => <th key={v.id} className="text-right font-semibold px-2 py-1 whitespace-nowrap">{v.name}<span className="block text-[10px] font-normal">単価</span></th>)}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dets.map((d) => (
+                                  <tr key={d.boq_row_id} className="border-t border-slate-100 dark:border-ink-700">
+                                    <td className="px-2 py-1 text-slate-700 dark:text-slate-300">{d.kind === '別紙' && <span className="text-slate-400">別紙 </span>}{d.item_name}{d.spec ? <span className="text-slate-400"> / {d.spec}</span> : ''}</td>
+                                    <td className="px-2 py-1 text-right text-slate-500 whitespace-nowrap">{d.quantity_num ?? '—'}</td>
+                                    <td className="px-2 py-1 text-slate-500 whitespace-nowrap">{d.unit || ''}</td>
+                                    {activeVendors.map((v) => (
+                                      <td key={v.id} className={`text-right px-2 py-1 whitespace-nowrap ${d.min_vendor === v.id ? MIN_CELL : 'text-slate-600 dark:text-slate-300'}`}>
+                                        {d.byVendor[v.id] != null ? Number(d.byVendor[v.id]).toLocaleString() : '—'}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="text-xs text-slate-400 mt-2">最安＝行ごと/科目ごとの最小（黄）。金額＝公式数量×NET単価。別紙は別紙明細レベルで比較。</p>
     </div>
   )
 }
