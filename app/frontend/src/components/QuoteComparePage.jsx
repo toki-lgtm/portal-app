@@ -2,7 +2,8 @@
 //   設計書: 04.アプリ\見積比較_設計書.md（＝正）。
 //   P0 範囲: プロジェクト一覧/作成・原本数量書取込（boqParser）・業者追加＋6類型自動分類＋
 //            人による確認/上書き（書式軸×媒体軸トグル）。
-//   ※ Excel直読抽出・PDFキュー抽出・横並び比較・最安・書き戻しは P1 以降で追加する。
+//   P1: 横並び比較 / P2: PDFキュー抽出（ローカルagent）/ P3: 各社の単価書き戻し（原本書式保持xlsx生成）実装済。
+//   ※ Excel直読抽出・最安見積Excel・比較表Excel は今後。
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import axios from 'axios'
 import {
@@ -70,11 +71,13 @@ function Segmented({ options, value, onChange, disabled }) {
 
 // ─────────────────────────────────────────────────────────────
 // 業者カード（分類確認UIが主役）
-function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, busy }) {
+function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, busy, wb, onWriteback, onDownloadWb }) {
   const lowConf = vendor.classify_confidence === 'low'
   const isExcel = vendor.medium === 'excel'
   const extracting = vendor.status === 'extracting'
   const extracted = vendor.status === 'extracted'
+  const wbBusy = wb && (wb.status === 'queued' || wb.status === 'processing' || (wb.status === 'done' && !wb.ready))
+  const wbReady = wb && wb.status === 'done' && wb.ready
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -155,6 +158,41 @@ function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, bus
         )}
       </div>
 
+      {/* 書き戻し（P3）— 原本書式を保持したまま単価＋金額を記入したExcelを生成（このPCのExcelで処理） */}
+      {extracted && (
+        <div className="mt-3 pt-3 border-t border-slate-100 dark:border-ink-700 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs min-w-0">
+            <span className="font-semibold text-slate-600 dark:text-slate-300">原本書式へ単価書き戻し</span>
+            {wbReady ? (
+              <span className="text-slate-500 ml-2">
+                生成済{wb.cells_written != null ? `（${wb.cells_written}行${wb.total != null ? ` ・Σ${yen(wb.total)}` : ''}）` : ''}
+              </span>
+            ) : wbBusy ? (
+              <span className="inline-flex items-center gap-1.5 text-brand-700 dark:text-brand-300 ml-2">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />生成中…（このPCのExcelで処理）
+              </span>
+            ) : (
+              <span className="text-slate-400 ml-2">原本テンプレートに単価＋金額を記入したxlsxを生成します</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {wbReady && (
+              <button
+                onClick={() => onDownloadWb(vendor)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-brand-600 text-white px-3 py-1.5 text-xs font-semibold hover:bg-brand-700">
+                <Download className="w-3.5 h-3.5" />ダウンロード
+              </button>
+            )}
+            <button
+              onClick={() => onWriteback(vendor)}
+              disabled={busy || wbBusy}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-accent-400 dark:border-accent-500/40 text-accent-600 dark:text-accent-400 px-3 py-1.5 text-xs font-semibold hover:bg-accent-50 dark:hover:bg-accent-500/10 disabled:opacity-50">
+              <FileSpreadsheet className="w-3.5 h-3.5" />{wbReady ? '再生成' : 'Excel生成'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {lowConf && (
         <p className="text-xs text-danger-600 dark:text-danger-400 mt-2">
           自動判定の確信度が低い見積です。書式・媒体が正しいか確認し、違えばトグルで上書きしてください。
@@ -178,7 +216,9 @@ export default function QuoteComparePage({ onBack }) {
   const [showNew, setShowNew] = useState(false)
   const [showAddVendor, setShowAddVendor] = useState(false)
   const [extractMsgs, setExtractMsgs] = useState({})   // { [vendorId]: 進捗ラベル }
+  const [writebacks, setWritebacks] = useState({})     // { [vendorId]: {status, ready, file, total, cells_written} }
   const detailRef = useRef(detail)
+  const writebacksRef = useRef(writebacks)
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -342,6 +382,76 @@ export default function QuoteComparePage({ onBack }) {
     }, 6000)
     return () => clearInterval(iv)
   }, [detail?.id, refreshDetail, showToast])
+
+  // ── 書き戻し（P3）：Excel生成ジョブ投入 → ポーリング → ダウンロード ──
+  useEffect(() => { writebacksRef.current = writebacks }, [writebacks])
+
+  const startWriteback = async (vendor) => {
+    setBusy(true)
+    try {
+      const { data } = await axios.post(`${apiUrl}/api/quote-compare/vendors/${vendor.id}/writeback`, {}, authConfig())
+      setWritebacks((m) => ({ ...m, [vendor.id]: { status: 'queued' } }))
+      showToast('success', `Excel書き戻しをこのPCのエージェントへ投入しました（単価${data.cells}件）`)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'Excel生成の投入に失敗しました')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const downloadWriteback = async (vendor) => {
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/quote-compare/vendors/${vendor.id}/writeback-download`,
+        { ...authConfig(), responseType: 'blob' })
+      const name = writebacksRef.current[vendor.id]?.file || `【単価書戻し】${vendor.name}.xlsx`
+      const url = URL.createObjectURL(data)
+      const a = document.createElement('a')
+      a.href = url; a.download = name
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'ダウンロードに失敗しました')
+    }
+  }
+
+  // 詳細を開いた時に、抽出済み業者の既存の書き戻し状態を一度だけ復元（生成済みならDLボタンを出す）
+  useEffect(() => {
+    if (!detail) return undefined
+    let cancelled = false
+    ;(async () => {
+      for (const v of (detail.vendors || []).filter((x) => x.status === 'extracted')) {
+        try {
+          const { data } = await axios.get(`${apiUrl}/api/quote-compare/vendors/${v.id}/writeback-status`, authConfig())
+          if (!cancelled && data.status && data.status !== 'none') {
+            setWritebacks((m) => ({ ...m, [v.id]: data }))
+          }
+        } catch { /* noop */ }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [detail?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 生成中の書き戻しをポーリングし、完了したら通知＆DLボタンを表示
+  useEffect(() => {
+    if (!detail) return undefined
+    const iv = setInterval(async () => {
+      const pending = Object.entries(writebacksRef.current)
+        .filter(([, w]) => w && (w.status === 'queued' || w.status === 'processing' || (w.status === 'done' && !w.ready)))
+      if (!pending.length) return
+      for (const [vid] of pending) {
+        try {
+          const { data } = await axios.get(`${apiUrl}/api/quote-compare/vendors/${vid}/writeback-status`, authConfig())
+          setWritebacks((m) => ({ ...m, [vid]: data }))
+          if (data.status === 'done' && data.ready) {
+            const v = (detailRef.current?.vendors || []).find((x) => String(x.id) === String(vid))
+            showToast('success', `${v?.name || ''}: Excel書き戻し完了（DLできます）`)
+          }
+        } catch { /* 次のtickで再試行 */ }
+      }
+    }, 6000)
+    return () => clearInterval(iv)
+  }, [detail?.id, showToast])
 
   const reclassify = async (vendor, patch) => {
     setBusy(true)
@@ -522,7 +632,7 @@ export default function QuoteComparePage({ onBack }) {
           ) : (
             <div className="grid gap-3">
               {vendors.map((v) => (
-                <VendorCard key={v.id} vendor={v} busy={busy} onReclassify={reclassify} onDelete={deleteVendor} onExtract={startExtract} extractMsg={extractMsgs[v.id]} />
+                <VendorCard key={v.id} vendor={v} busy={busy} onReclassify={reclassify} onDelete={deleteVendor} onExtract={startExtract} extractMsg={extractMsgs[v.id]} wb={writebacks[v.id]} onWriteback={startWriteback} onDownloadWb={downloadWriteback} />
               ))}
             </div>
           )}
