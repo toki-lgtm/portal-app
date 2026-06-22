@@ -39,6 +39,7 @@ import WorkScopeGate from './components/WorkScopeGate'
 import RegulationsPage from './components/RegulationsPage'
 import BusinessCardsPage from './components/BusinessCardsPage'
 import ManualPage from './components/ManualPage'
+import QuoteComparePage from './components/QuoteComparePage'
 import { applyTheme, loadTheme } from './lib/theme'
 import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
@@ -1107,6 +1108,8 @@ function AppContent() {
     page = <BidsPage onBack={() => setView('dashboard')} />
   } else if (view === 'construction') {
     page = <ConstructionPage onBack={() => setView('dashboard')} />
+  } else if (view === 'quote-compare') {
+    page = <QuoteComparePage onBack={() => setView('dashboard')} />
   } else if (view === 'documents') {
     page = (
       <DocumentsPage
