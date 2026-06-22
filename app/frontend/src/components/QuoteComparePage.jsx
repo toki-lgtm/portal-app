@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Loader2, Upload, Trash2, FileSpreadsheet,
-  Building2, AlertTriangle, CheckCircle2, Layers, FileText,
+  Building2, AlertTriangle, CheckCircle2, Layers, FileText, Download,
 } from 'lucide-react'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
@@ -69,8 +69,11 @@ function Segmented({ options, value, onChange, disabled }) {
 
 // ─────────────────────────────────────────────────────────────
 // 業者カード（分類確認UIが主役）
-function VendorCard({ vendor, onReclassify, onDelete, busy }) {
+function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, busy }) {
   const lowConf = vendor.classify_confidence === 'low'
+  const isExcel = vendor.medium === 'excel'
+  const extracting = vendor.status === 'extracting'
+  const extracted = vendor.status === 'extracted'
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -121,6 +124,36 @@ function VendorCard({ vendor, onReclassify, onDelete, busy }) {
           />
         </div>
       </div>
+
+      {/* 抽出（読み込み）— PDFはこのPCの常駐エージェント、Excelは P1 で対応予定 */}
+      <div className="mt-3 pt-3 border-t border-slate-100 dark:border-ink-700 flex items-center justify-between gap-3 flex-wrap">
+        {isExcel ? (
+          <span className="text-xs text-slate-400">Excel直読の抽出は P1 で対応予定です</span>
+        ) : extracted ? (
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <Badge tone="success"><CheckCircle2 className="w-3 h-3" />抽出完了</Badge>
+            <span className="text-slate-500">単価 {vendor.cell_count ?? 0} 件</span>
+            {vendor.unmatched_count > 0 && <Badge tone="warning">要レビュー {vendor.unmatched_count}</Badge>}
+            {vendor.extracted_total != null && <span className="text-slate-500">検算Σ {yen(vendor.extracted_total)}</span>}
+            {Array.isArray(vendor.excluded) && vendor.excluded.length > 0 && <span className="text-slate-400">除外 {vendor.excluded.length}件</span>}
+          </div>
+        ) : extracting ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-brand-700 dark:text-brand-300">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />抽出中…（このPCのエージェントが処理）{extractMsg ? `／${extractMsg}` : ''}
+          </span>
+        ) : (
+          <span className="text-xs text-slate-400">未抽出</span>
+        )}
+        {!isExcel && (
+          <button
+            onClick={() => onExtract(vendor)}
+            disabled={busy || extracting}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-brand-300 dark:border-brand-500/40 text-brand-700 dark:text-brand-300 px-3 py-1.5 text-xs font-semibold hover:bg-brand-50 dark:hover:bg-brand-500/10 disabled:opacity-50">
+            <Download className="w-3.5 h-3.5" />{extracted ? '再抽出' : '抽出'}
+          </button>
+        )}
+      </div>
+
       {lowConf && (
         <p className="text-xs text-danger-600 dark:text-danger-400 mt-2">
           自動判定の確信度が低い見積です。書式・媒体が正しいか確認し、違えばトグルで上書きしてください。
@@ -142,6 +175,8 @@ export default function QuoteComparePage({ onBack }) {
 
   const [showNew, setShowNew] = useState(false)
   const [showAddVendor, setShowAddVendor] = useState(false)
+  const [extractMsgs, setExtractMsgs] = useState({})   // { [vendorId]: 進捗ラベル }
+  const detailRef = useRef(detail)
 
   const loadProjects = useCallback(async () => {
     setLoading(true)
@@ -258,6 +293,49 @@ export default function QuoteComparePage({ onBack }) {
       setBusy(false)
     }
   }
+
+  // 抽出ジョブをこのPCの常駐エージェントへ投入（PDF業者のみ）
+  const startExtract = async (vendor) => {
+    setBusy(true)
+    try {
+      await axios.post(`${apiUrl}/api/quote-compare/vendors/${vendor.id}/extract`, {}, authConfig())
+      setExtractMsgs((m) => ({ ...m, [vendor.id]: 'キュー待機中' }))
+      await refreshDetail()
+      showToast('success', 'このPCの抽出エージェントへ投入しました（数分かかります）')
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '抽出の投入に失敗しました')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 抽出中の業者をポーリングし、完了したら詳細を再取得して反映
+  useEffect(() => { detailRef.current = detail }, [detail])
+  useEffect(() => {
+    if (!detail) return undefined
+    const statusLabel = (d) => (
+      d.status === 'queued' ? 'キュー待機中'
+        : d.status === 'processing' ? '抽出中…'
+          : d.status === 'done' ? (d.imported ? '取込完了' : '結果の同期待ち')
+            : d.status === 'none' ? '未投入' : d.status
+    )
+    const iv = setInterval(async () => {
+      const d = detailRef.current
+      const pend = (d?.vendors || []).filter((v) => v.status === 'extracting')
+      if (!pend.length) return
+      for (const v of pend) {
+        try {
+          const { data } = await axios.get(`${apiUrl}/api/quote-compare/vendors/${v.id}/extract-status`, authConfig())
+          setExtractMsgs((m) => ({ ...m, [v.id]: statusLabel(data) }))
+          if (data.status === 'done' && data.imported) {
+            showToast('success', `${v.name}: 抽出完了（単価${data.cells ?? 0}件・要レビュー${data.unmatched ?? 0}件）`)
+            await refreshDetail()
+          }
+        } catch { /* 次のtickで再試行 */ }
+      }
+    }, 6000)
+    return () => clearInterval(iv)
+  }, [detail?.id, refreshDetail, showToast])
 
   const reclassify = async (vendor, patch) => {
     setBusy(true)
@@ -436,7 +514,7 @@ export default function QuoteComparePage({ onBack }) {
           ) : (
             <div className="grid gap-3">
               {vendors.map((v) => (
-                <VendorCard key={v.id} vendor={v} busy={busy} onReclassify={reclassify} onDelete={deleteVendor} />
+                <VendorCard key={v.id} vendor={v} busy={busy} onReclassify={reclassify} onDelete={deleteVendor} onExtract={startExtract} extractMsg={extractMsgs[v.id]} />
               ))}
             </div>
           )}
