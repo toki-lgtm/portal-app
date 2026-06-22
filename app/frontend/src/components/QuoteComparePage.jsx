@@ -10,7 +10,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Loader2, Upload, Trash2, FileSpreadsheet,
   Building2, AlertTriangle, CheckCircle2, Layers, FileText, Download,
-  BarChart3, ChevronRight, ChevronDown, FolderOpen, RefreshCw, ExternalLink,
+  BarChart3, ChevronRight, ChevronDown, FolderOpen, RefreshCw,
 } from 'lucide-react'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
@@ -958,25 +958,24 @@ function FolderIngestModal({ projectId, onClose, onDone, showToast }) {
   return (
     <ModalShell title="フォルダから一括取込" onClose={onClose}>
       <div className="grid gap-4">
-        {/* 手順ガイド＋フォルダリンク */}
+        {/* 手順ガイド＋ドロップ先パス */}
         <div className="rounded-xl bg-slate-50 dark:bg-ink-900 border border-slate-200 dark:border-ink-700 p-3 text-xs text-slate-600 dark:text-slate-300">
           <div className="font-semibold mb-1">手順</div>
           <ol className="list-decimal ml-4 space-y-0.5">
             <li>「数量書」タブで<b>発注者の数量書（原本）</b>を先に取り込む</li>
-            <li>下記フォルダに<b>各社の見積をまとめて入れる</b>（共有ドライブ）</li>
+            <li>下記の<b>データ保管フォルダ</b>に<b>各社の見積をまとめて入れる</b>（社員がアクセスできる共有ドライブ）</li>
+            <li>このPCの常駐エージェントが<b>社内システムへ自動移送</b>（数十秒）</li>
             <li>「再スキャン」→ 業者名を確認 → 「取込実行」</li>
           </ol>
-          {scan?.folder_path && (
-            <div className="mt-2 flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-[11px] bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 rounded px-2 py-1 break-all">{scan.folder_path}</span>
-              {scan.folder_url && (
-                <a href={scan.folder_url} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-brand-700 dark:text-brand-300 font-semibold hover:underline">
-                  <ExternalLink className="w-3.5 h-3.5" />フォルダを開く
-                </a>
-              )}
+          {scan?.inbox_drop_win && (
+            <div className="mt-2">
+              <div className="text-slate-500 mb-0.5">ドロップ先（データ保管）:</div>
+              <span className="font-mono text-[11px] bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 rounded px-2 py-1 break-all inline-block">{scan.inbox_drop_win}</span>
             </div>
           )}
+          <p className="mt-2 text-slate-400">
+            ※ 社内システムは社員アクセス不可のため、社員はデータ保管に入れます。移送・分析はこのPCが常時稼働している必要があります。
+          </p>
         </div>
 
         {scan && !scan.boq_ready && (
