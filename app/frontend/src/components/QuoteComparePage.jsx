@@ -10,7 +10,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Loader2, Upload, Trash2, FileSpreadsheet,
   Building2, AlertTriangle, CheckCircle2, Layers, FileText, Download,
-  BarChart3, ChevronRight, ChevronDown,
+  BarChart3, ChevronRight, ChevronDown, FolderOpen, RefreshCw, ExternalLink,
 } from 'lucide-react'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
@@ -214,6 +214,7 @@ export default function QuoteComparePage({ onBack }) {
 
   const [showNew, setShowNew] = useState(false)
   const [showAddVendor, setShowAddVendor] = useState(false)
+  const [showIngest, setShowIngest] = useState(false)
   const [extractMsgs, setExtractMsgs] = useState({})   // { [vendorId]: 進捗ラベル }
   const [writebacks, setWritebacks] = useState({})     // { [vendorId]: {status, ready, file, total, cells_written} }
   const detailRef = useRef(detail)
@@ -620,15 +621,22 @@ export default function QuoteComparePage({ onBack }) {
       {/* タブ2: 業者・分類（6類型 自動判定＋確認） */}
       {tab === 'vendors' && (
         <div>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3 gap-3">
             <p className="text-xs text-slate-500">
               アップロード直後に6類型を自動判定します。<span className="text-danger-600 dark:text-danger-400 font-semibold">誤分類は以降の抽出・照合を総崩れさせる</span>ため、必ず確認してください。
             </p>
-            <button
-              onClick={() => setShowAddVendor(true)}
-              className="inline-flex items-center gap-2 rounded-xl bg-brand-600 text-white px-4 py-2 text-sm font-semibold hover:bg-brand-700 shrink-0">
-              <Plus className="w-4 h-4" />業者追加
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowIngest(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-brand-300 dark:border-brand-500/40 text-brand-700 dark:text-brand-300 px-4 py-2 text-sm font-semibold hover:bg-brand-50 dark:hover:bg-brand-500/10">
+                <FolderOpen className="w-4 h-4" />フォルダ取込
+              </button>
+              <button
+                onClick={() => setShowAddVendor(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-brand-600 text-white px-4 py-2 text-sm font-semibold hover:bg-brand-700">
+                <Plus className="w-4 h-4" />業者追加
+              </button>
+            </div>
           </div>
           {vendors.length === 0 ? (
             <div className="text-center text-slate-400 text-sm py-12 border border-dashed border-slate-200 dark:border-ink-700 rounded-2xl">
@@ -647,6 +655,14 @@ export default function QuoteComparePage({ onBack }) {
       {tab === 'compare' && <ComparisonView comparison={comparison} />}
 
       {showAddVendor && <AddVendorModal busy={busy} onClose={() => setShowAddVendor(false)} onSubmit={addVendor} />}
+      {showIngest && detail && (
+        <FolderIngestModal
+          projectId={detail.id}
+          onClose={() => setShowIngest(false)}
+          onDone={refreshDetail}
+          showToast={showToast}
+        />
+      )}
     </div>
   )
 }
@@ -881,6 +897,170 @@ function AddVendorModal({ onClose, onSubmit, busy }) {
           <button onClick={() => onSubmit({ name, files })} disabled={busy}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50">
             {busy && <Loader2 className="w-4 h-4 animate-spin" />}追加して分類
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// フォルダ一括取込モーダル：専用ドライブフォルダへ各社見積をまとめて入れ、一発で
+// 「業者作成＋分類＋抽出（Excel即時/PDFはエージェント）」を全ファイル実行する。
+// 1ファイル=1業者。業者名はファイル名から推定し、取込前にここで確認・修正できる。
+function FolderIngestModal({ projectId, onClose, onDone, showToast }) {
+  const [scan, setScan] = useState(null)     // { folder_path, folder_url, boq_ready, files[] }
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [sel, setSel] = useState({})          // drive_id -> bool
+  const [names, setNames] = useState({})      // drive_id -> 業者名
+  const [results, setResults] = useState(null)
+
+  const doScan = useCallback(async () => {
+    setLoading(true); setResults(null)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/quote-compare/projects/${projectId}/ingest-folder`, authConfig())
+      setScan(data)
+      const s = {}; const n = {}
+      for (const f of data.files || []) {
+        s[f.drive_id] = f.supported && !f.already      // 既定: 対応形式かつ未取込のみ選択
+        n[f.drive_id] = f.guessed_name || f.name
+      }
+      setSel(s); setNames(n)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'フォルダのスキャンに失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }, [projectId, showToast])
+
+  useEffect(() => { doScan() }, [doScan])
+
+  const files = scan?.files || []
+  const selectedFiles = files.filter((f) => sel[f.drive_id])
+  const canRun = scan?.boq_ready && selectedFiles.length > 0 && !running
+
+  const runIngest = async () => {
+    setRunning(true)
+    try {
+      const items = selectedFiles.map((f) => ({ drive_id: f.drive_id, name: (names[f.drive_id] || '').trim() || f.guessed_name, filename: f.name }))
+      const { data } = await axios.post(`${apiUrl}/api/quote-compare/projects/${projectId}/ingest`, { items }, authConfig())
+      setResults(data)
+      const msg = `取込 ${data.created}/${data.total} 件（Excel即時 ${data.excel_done} ・PDFキュー ${data.queued}）`
+      showToast(data.created === data.total ? 'success' : 'warning', msg)
+      await onDone?.()
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '取込に失敗しました')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <ModalShell title="フォルダから一括取込" onClose={onClose}>
+      <div className="grid gap-4">
+        {/* 手順ガイド＋フォルダリンク */}
+        <div className="rounded-xl bg-slate-50 dark:bg-ink-900 border border-slate-200 dark:border-ink-700 p-3 text-xs text-slate-600 dark:text-slate-300">
+          <div className="font-semibold mb-1">手順</div>
+          <ol className="list-decimal ml-4 space-y-0.5">
+            <li>「数量書」タブで<b>発注者の数量書（原本）</b>を先に取り込む</li>
+            <li>下記フォルダに<b>各社の見積をまとめて入れる</b>（共有ドライブ）</li>
+            <li>「再スキャン」→ 業者名を確認 → 「取込実行」</li>
+          </ol>
+          {scan?.folder_path && (
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-[11px] bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 rounded px-2 py-1 break-all">{scan.folder_path}</span>
+              {scan.folder_url && (
+                <a href={scan.folder_url} target="_blank" rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-brand-700 dark:text-brand-300 font-semibold hover:underline">
+                  <ExternalLink className="w-3.5 h-3.5" />フォルダを開く
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+
+        {scan && !scan.boq_ready && (
+          <div className="rounded-xl bg-danger-50 dark:bg-danger-500/10 border border-danger-200 dark:border-danger-500/30 p-3 text-xs text-danger-700 dark:text-danger-300 inline-flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            先に「数量書」タブで発注者書式（原本数量書）を取り込んでください。比較の基準が無いと取込できません。
+          </div>
+        )}
+
+        {/* ファイル一覧 */}
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            候補ファイル {files.length} 件{files.length > 0 ? `（選択 ${selectedFiles.length}）` : ''}
+          </div>
+          <button onClick={doScan} disabled={loading || running}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-700 dark:text-brand-300 hover:underline disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />再スキャン
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="text-center text-slate-400 text-sm py-8 inline-flex items-center justify-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" />フォルダを読み込み中…
+          </div>
+        ) : files.length === 0 ? (
+          <div className="text-center text-slate-400 text-sm py-8 border border-dashed border-slate-200 dark:border-ink-700 rounded-xl">
+            フォルダにファイルがありません。上記フォルダに各社見積を入れてから「再スキャン」してください。
+          </div>
+        ) : (
+          <div className="grid gap-1.5 max-h-[40vh] overflow-y-auto pr-1">
+            {files.map((f) => {
+              return (
+                <div key={f.drive_id} className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-ink-700 px-2.5 py-1.5">
+                  <input type="checkbox" checked={!!sel[f.drive_id]} disabled={!f.supported || running}
+                    onChange={(e) => setSel((m) => ({ ...m, [f.drive_id]: e.target.checked }))}
+                    className="shrink-0 w-4 h-4 accent-brand-600" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {f.ext === 'pdf' ? <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" /> : <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500 shrink-0" />}
+                      <span className="text-xs text-slate-600 dark:text-slate-300 truncate">{f.name}</span>
+                      {!f.supported && <Badge tone="neutral">未対応</Badge>}
+                      {f.already && <Badge tone="warning">取込済</Badge>}
+                    </div>
+                    {f.supported && (
+                      <input
+                        className="mt-1 w-full text-xs rounded-md border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 px-2 py-1"
+                        value={names[f.drive_id] ?? ''}
+                        disabled={running}
+                        placeholder="業者名"
+                        onChange={(e) => setNames((m) => ({ ...m, [f.drive_id]: e.target.value }))}
+                      />
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* 取込結果 */}
+        {results && (
+          <div className="rounded-xl border border-slate-200 dark:border-ink-700 p-3 text-xs grid gap-1 max-h-[24vh] overflow-y-auto">
+            <div className="font-semibold text-slate-700 dark:text-slate-200">取込結果</div>
+            {results.results.map((r, i) => (
+              <div key={i} className="flex items-center gap-2">
+                {r.ok ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 text-danger-500 shrink-0" />}
+                <span className="text-slate-600 dark:text-slate-300 truncate">{r.name}</span>
+                {r.ok && r.extract === 'excel' && <span className="text-slate-400">Excel直読 単価{r.cells}件{r.unmatched ? `・要レビュー${r.unmatched}` : ''}</span>}
+                {r.ok && r.extract === 'queued' && <span className="text-slate-400">PDF抽出をエージェントへ投入</span>}
+                {r.ok && (r.extract === 'error' || r.extract === 'queue_error') && <span className="text-amber-600">{r.error}</span>}
+                {!r.ok && <span className="text-danger-600">{r.error}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">
+            {results ? '閉じる' : 'キャンセル'}
+          </button>
+          <button onClick={runIngest} disabled={!canRun}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50">
+            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderOpen className="w-4 h-4" />}
+            取込実行{selectedFiles.length > 0 ? `（${selectedFiles.length}件）` : ''}
           </button>
         </div>
       </div>
