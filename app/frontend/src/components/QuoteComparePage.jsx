@@ -3,7 +3,8 @@
 //   P0 範囲: プロジェクト一覧/作成・原本数量書取込（boqParser）・業者追加＋6類型自動分類＋
 //            人による確認/上書き（書式軸×媒体軸トグル）。
 //   P1: 横並び比較 / P2: PDFキュー抽出（ローカルagent）/ P3: 各社の単価書き戻し（原本書式保持xlsx生成）実装済。
-//   ※ Excel直読抽出・最安見積Excel・比較表Excel は今後。
+//   Excel直読抽出（類型1=公式同一行/類型2=各社様式ファジー照合）＝クラウド完結・即時。実装済。
+//   ※ 最安見積Excel・比較表Excel・NET換算 は今後。
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import axios from 'axios'
 import {
@@ -129,11 +130,9 @@ function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, bus
         </div>
       </div>
 
-      {/* 抽出（読み込み）— PDFはこのPCの常駐エージェント、Excelは P1 で対応予定 */}
+      {/* 抽出（読み込み）— Excel はクラウドで直読・即時、PDF はこのPCの常駐エージェント */}
       <div className="mt-3 pt-3 border-t border-slate-100 dark:border-ink-700 flex items-center justify-between gap-3 flex-wrap">
-        {isExcel ? (
-          <span className="text-xs text-slate-400">Excel直読の抽出は P1 で対応予定です</span>
-        ) : extracted ? (
+        {extracted ? (
           <div className="flex items-center gap-2 flex-wrap text-xs">
             <Badge tone="success"><CheckCircle2 className="w-3 h-3" />抽出完了</Badge>
             <span className="text-slate-500">単価 {vendor.cell_count ?? 0} 件</span>
@@ -146,16 +145,16 @@ function VendorCard({ vendor, onReclassify, onDelete, onExtract, extractMsg, bus
             <Loader2 className="w-3.5 h-3.5 animate-spin" />抽出中…（このPCのエージェントが処理）{extractMsg ? `／${extractMsg}` : ''}
           </span>
         ) : (
-          <span className="text-xs text-slate-400">未抽出</span>
+          <span className="text-xs text-slate-400">
+            未抽出{isExcel ? '（Excelを直読して即時取込）' : '（PDFはこのPCのエージェントが処理）'}
+          </span>
         )}
-        {!isExcel && (
-          <button
-            onClick={() => onExtract(vendor)}
-            disabled={busy || extracting}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-brand-300 dark:border-brand-500/40 text-brand-700 dark:text-brand-300 px-3 py-1.5 text-xs font-semibold hover:bg-brand-50 dark:hover:bg-brand-500/10 disabled:opacity-50">
-            <Download className="w-3.5 h-3.5" />{extracted ? '再抽出' : '抽出'}
-          </button>
-        )}
+        <button
+          onClick={() => onExtract(vendor)}
+          disabled={busy || extracting}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-brand-300 dark:border-brand-500/40 text-brand-700 dark:text-brand-300 px-3 py-1.5 text-xs font-semibold hover:bg-brand-50 dark:hover:bg-brand-500/10 disabled:opacity-50">
+          <Download className="w-3.5 h-3.5" />{extracted ? '再抽出' : '抽出'}
+        </button>
       </div>
 
       {/* 書き戻し（P3）— 原本書式を保持したまま単価＋金額を記入したExcelを生成（このPCのExcelで処理） */}
@@ -340,14 +339,20 @@ export default function QuoteComparePage({ onBack }) {
     }
   }
 
-  // 抽出ジョブをこのPCの常駐エージェントへ投入（PDF業者のみ）
+  // 抽出を実行。Excelはクラウドで直読・即時取込、PDFはこのPCの常駐エージェントへキュー投入。
   const startExtract = async (vendor) => {
     setBusy(true)
     try {
-      await axios.post(`${apiUrl}/api/quote-compare/vendors/${vendor.id}/extract`, {}, authConfig())
-      setExtractMsgs((m) => ({ ...m, [vendor.id]: 'キュー待機中' }))
-      await refreshDetail()
-      showToast('success', 'このPCの抽出エージェントへ投入しました（数分かかります）')
+      const { data } = await axios.post(`${apiUrl}/api/quote-compare/vendors/${vendor.id}/extract`, {}, authConfig())
+      if (data?.mode === 'excel') {
+        // 同期完了（ローカル不要）
+        await refreshDetail()
+        showToast('success', `${vendor.name}: Excel直読で抽出完了（単価${data.cells ?? 0}件・要レビュー${data.unmatched ?? 0}件）`)
+      } else {
+        setExtractMsgs((m) => ({ ...m, [vendor.id]: 'キュー待機中' }))
+        await refreshDetail()
+        showToast('success', 'このPCの抽出エージェントへ投入しました（数分かかります）')
+      }
     } catch (e) {
       showToast('error', e.response?.data?.error || '抽出の投入に失敗しました')
     } finally {
