@@ -110,7 +110,7 @@ const EMPTY_FORM = {
 //       'manual' = 手入力（画像エリアは初期非表示）
 //       undefined = 編集時（従来どおり画像差し替え可）
 // ─────────────────────────────────────────────────────────
-function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
+function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
   const isNew = !item?.id
   const [form, setForm] = useState(() => {
     if (!item) return EMPTY_FORM
@@ -204,6 +204,16 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
       const fd = new FormData()
       fd.append('file', file)
       const res = await axios.post(`${apiUrl}/api/cards/scan`, fd, authConfigMultipart())
+
+      // 1画像に複数枚の名刺が写っていた場合 → 複数名刺レビュー画面へ切り替え
+      const detected = res.data?.cards
+      if (onMulti && res.data?.count > 1 && Array.isArray(detected) && detected.length > 1) {
+        setScanning(false)
+        showToast('success', `${detected.length}枚の名刺を検出しました。内容を確認してください`)
+        onMulti(file, detected)
+        return
+      }
+
       // API は { extracted: {...} } 形式で返す（直下ではなく extracted を読む）
       const fields = res.data?.extracted || res.data || {}
       setForm((prev) => {
@@ -458,6 +468,200 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast }) {
         <Button variant="primary" onClick={save} disabled={saving || scanning}>
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           {saving ? '保存中...' : (isNew ? '登録する' : '更新する')}
+        </Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ─────────────────────────────────────────────────────────
+// 複数名刺レビューモーダル
+// 1画像に複数枚の名刺が写っていた場合に表示。検出された各名刺を
+// 切り出しプレビュー付きで個別に確認・編集し、まとめて登録する。
+// ─────────────────────────────────────────────────────────
+const MULTI_FIELDS = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note']
+
+function MultiCardReviewModal({ file, cards, onClose, onSaved, showToast }) {
+  const [rows, setRows] = useState(() =>
+    cards.map((c) => {
+      const ex = c.extracted || {}
+      const r = { box_2d: c.box_2d || null, include: true, expanded: false, category: '', visibility: 'shared', preview: null }
+      for (const k of MULTI_FIELDS) r[k] = ex[k] == null ? '' : String(ex[k])
+      return r
+    })
+  )
+  const [saving, setSaving] = useState(false)
+  const [categoryOptions, setCategoryOptions] = useState([])
+
+  const setRow = (idx, k, v) => setRows((rs) => rs.map((r, i) => (i === idx ? { ...r, [k]: v } : r)))
+
+  // カテゴリ候補
+  useEffect(() => {
+    axios.get(`${apiUrl}/api/cards/categories`, authConfig())
+      .then((res) => setCategoryOptions(res.data?.categories || []))
+      .catch(() => setCategoryOptions([]))
+  }, [])
+
+  // 元画像から box_2d ごとにクライアント側で切り出してプレビュー生成
+  useEffect(() => {
+    if (!file) return
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      const W = img.naturalWidth, H = img.naturalHeight
+      setRows((rs) => rs.map((r) => {
+        const box = r.box_2d
+        try {
+          let sx = 0, sy = 0, sw = W, sh = H
+          if (Array.isArray(box) && box.length === 4) {
+            const [ymin, xmin, ymax, xmax] = box.map(Number)
+            const pad = Math.min(W, H) * 0.03
+            sx = Math.max(0, (Math.min(xmin, xmax) / 1000) * W - pad)
+            sy = Math.max(0, (Math.min(ymin, ymax) / 1000) * H - pad)
+            const rx = Math.min(W, (Math.max(xmin, xmax) / 1000) * W + pad)
+            const ry = Math.min(H, (Math.max(ymin, ymax) / 1000) * H + pad)
+            sw = Math.max(1, rx - sx)
+            sh = Math.max(1, ry - sy)
+          }
+          const scale = Math.min(1, 360 / sw)
+          const cv = document.createElement('canvas')
+          cv.width = Math.max(1, Math.round(sw * scale))
+          cv.height = Math.max(1, Math.round(sh * scale))
+          cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height)
+          return { ...r, preview: cv.toDataURL('image/jpeg', 0.8) }
+        } catch {
+          return r
+        }
+      }))
+      URL.revokeObjectURL(url)
+    }
+    img.onerror = () => URL.revokeObjectURL(url)
+    img.src = url
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file])
+
+  const selectedCount = rows.filter((r) => r.include).length
+
+  const setAllVisibility = (v) => setRows((rs) => rs.map((r) => ({ ...r, visibility: v })))
+
+  const save = async () => {
+    const targets = rows.filter((r) => r.include)
+    if (targets.length === 0) { showToast('error', '登録する名刺を1枚以上選択してください'); return }
+    const invalid = targets.find((r) => !r.full_name.trim() && !r.company.trim())
+    if (invalid) { showToast('error', '各名刺に氏名または会社名が必要です（未入力の名刺があります）'); return }
+
+    setSaving(true)
+    try {
+      const payload = targets.map((r) => {
+        const o = { box_2d: r.box_2d, category: r.category, visibility: r.visibility }
+        for (const k of MULTI_FIELDS) o[k] = r[k]
+        return o
+      })
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('cards', JSON.stringify(payload))
+      const res = await axios.post(`${apiUrl}/api/cards/batch`, fd, authConfigMultipart())
+      showToast('success', `${res.data?.count ?? targets.length}件の名刺を登録しました`)
+      onSaved()
+      onClose()
+    } catch (err) {
+      showToast('error', err.response?.data?.error || '一括登録に失敗しました')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell title={`複数の名刺を確認（${rows.length}枚検出）`} onClose={onClose} wide>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          1枚の画像から複数の名刺を検出しました。内容を確認・修正し、登録する名刺だけにチェックを入れてください。
+        </p>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-slate-400">公開範囲を一括設定:</span>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setAllVisibility('shared')}>全社共有</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setAllVisibility('private')}>個人のみ</Button>
+        </div>
+      </div>
+
+      <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+        {rows.map((r, idx) => (
+          <div
+            key={idx}
+            className={`rounded-2xl border p-3 transition ${r.include
+              ? 'border-brand-200 dark:border-brand-500/30 bg-white dark:bg-ink-800'
+              : 'border-slate-200 dark:border-ink-600 bg-slate-50/70 dark:bg-ink-900/40 opacity-60'}`}
+          >
+            <div className="flex gap-3">
+              {/* チェック + プレビュー */}
+              <div className="flex flex-col items-center gap-2 shrink-0">
+                <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 cursor-pointer">
+                  <input type="checkbox" checked={r.include} onChange={(e) => setRow(idx, 'include', e.target.checked)} className="w-4 h-4 accent-brand-600" />
+                  登録
+                </label>
+                {r.preview ? (
+                  <img src={r.preview} alt={`名刺${idx + 1}`} className="w-28 h-auto max-h-28 object-contain rounded-lg border border-slate-200 dark:border-ink-600 bg-slate-100 dark:bg-ink-700" />
+                ) : (
+                  <div className="w-28 h-20 rounded-lg bg-slate-100 dark:bg-ink-700 flex items-center justify-center">
+                    <User className="w-8 h-8 text-slate-300 dark:text-ink-500" />
+                  </div>
+                )}
+              </div>
+
+              {/* 主要フィールド */}
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Field label="氏名"><input className={inputCls} value={r.full_name} onChange={(e) => setRow(idx, 'full_name', e.target.value)} placeholder="例: 山田 太郎" /></Field>
+                  <Field label="会社名"><input className={inputCls} value={r.company} onChange={(e) => setRow(idx, 'company', e.target.value)} placeholder="例: 株式会社◯◯" /></Field>
+                  <Field label="部署"><input className={inputCls} value={r.department} onChange={(e) => setRow(idx, 'department', e.target.value)} /></Field>
+                  <Field label="役職"><input className={inputCls} value={r.title} onChange={(e) => setRow(idx, 'title', e.target.value)} /></Field>
+                  <Field label="電話番号"><input className={inputCls} value={r.phone} onChange={(e) => setRow(idx, 'phone', e.target.value)} /></Field>
+                  <Field label="携帯番号"><input className={inputCls} value={r.mobile} onChange={(e) => setRow(idx, 'mobile', e.target.value)} /></Field>
+                  <Field label="メール"><input type="email" className={inputCls} value={r.email} onChange={(e) => setRow(idx, 'email', e.target.value)} /></Field>
+                  <Field label="カテゴリ">
+                    <input className={inputCls} value={r.category} onChange={(e) => setRow(idx, 'category', e.target.value)} list="card-category-list-multi" placeholder="任意" />
+                  </Field>
+                </div>
+
+                {r.expanded && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <Field label="FAX"><input className={inputCls} value={r.fax} onChange={(e) => setRow(idx, 'fax', e.target.value)} /></Field>
+                    <Field label="郵便番号"><input className={inputCls} value={r.postal_code} onChange={(e) => setRow(idx, 'postal_code', e.target.value)} /></Field>
+                    <Field label="ウェブサイト"><input className={inputCls} value={r.website} onChange={(e) => setRow(idx, 'website', e.target.value)} /></Field>
+                    <Field label="住所"><input className={inputCls} value={r.address} onChange={(e) => setRow(idx, 'address', e.target.value)} /></Field>
+                    <div className="sm:col-span-2">
+                      <Field label="保有資格"><input className={inputCls} value={r.qualifications} onChange={(e) => setRow(idx, 'qualifications', e.target.value)} /></Field>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Field label="メモ"><input className={inputCls} value={r.note} onChange={(e) => setRow(idx, 'note', e.target.value)} placeholder="社内メモ" /></Field>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <button type="button" onClick={() => setRow(idx, 'expanded', !r.expanded)} className="text-xs text-brand-600 dark:text-brand-300 underline">
+                    {r.expanded ? '詳細項目を閉じる' : 'その他の項目を編集'}
+                  </button>
+                  <select className={inputCls + ' max-w-[180px] py-1 text-xs'} value={r.visibility} onChange={(e) => setRow(idx, 'visibility', e.target.value)}>
+                    <option value="shared">全社共有</option>
+                    <option value="private">個人のみ</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <datalist id="card-category-list-multi">
+        {categoryOptions.map((opt) => (<option key={opt} value={opt} />))}
+      </datalist>
+
+      <div className="flex justify-end gap-2 mt-6">
+        <Button variant="ghost" size="sm" onClick={onClose}>キャンセル</Button>
+        <Button variant="primary" onClick={save} disabled={saving || selectedCount === 0}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          {saving ? '登録中...' : `${selectedCount}件を登録する`}
         </Button>
       </div>
     </ModalShell>
@@ -814,6 +1018,8 @@ export default function BusinessCardsPage({ onBack }) {
   const [selectedCard, setSelectedCard] = useState(null)  // 詳細表示中の名刺オブジェクト
   // editing: null=非表示 / { mode: 'scan'|'manual' }=新規 / item=編集
   const [editing, setEditing] = useState(null)
+  // multiReview: 1画像に複数名刺を検出したときの一括レビュー { file, cards }
+  const [multiReview, setMultiReview] = useState(null)
   const { toast, showToast } = useToast()
   const [isAdmin, setIsAdmin] = useState(false)
   const [currentUserEmail, setCurrentUserEmail] = useState('')
@@ -1191,6 +1397,18 @@ export default function BusinessCardsPage({ onBack }) {
           item={editing?.id ? editing : null}
           mode={editing?.mode}
           onClose={() => setEditing(null)}
+          onSaved={loadCards}
+          showToast={showToast}
+          onMulti={(file, cards) => { setEditing(null); setMultiReview({ file, cards }) }}
+        />
+      )}
+
+      {/* 複数名刺レビューモーダル（1画像に複数枚検出時） */}
+      {multiReview && (
+        <MultiCardReviewModal
+          file={multiReview.file}
+          cards={multiReview.cards}
+          onClose={() => setMultiReview(null)}
           onSaved={loadCards}
           showToast={showToast}
         />
