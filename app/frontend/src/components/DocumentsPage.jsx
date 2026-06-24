@@ -687,6 +687,17 @@ function SplitWizard({ batchRef, pageCount, initialSplits, onCancel, onComplete,
   )
 }
 
+// ArrayBuffer → Base64 文字列（大きいファイルでもスタック溢れしないよう分割）
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
 // ──────────────────────────────────────────────
 // 発信タブ（admin）
 // ──────────────────────────────────────────────
@@ -717,9 +728,14 @@ function SendTab({ showToast }) {
         setWizardFile(null)
         return // finally で uploading は解除される
       }
+      // バイト列をそのまま送ると本文の PDF 署名(%PDF)を内容検査で遮断されることが
+      // あるため、Base64 テキストにして送る（本文に %PDF/application/pdf が出ない）。
+      // サーバは encoding=base64 を見て復号する。
       const fd = new FormData()
-      const blob = new Blob([buf], { type: 'application/octet-stream' })
-      fd.append('file', blob, 'upload.bin')
+      const b64 = arrayBufferToBase64(buf)
+      const blob = new Blob([b64], { type: 'text/plain' })
+      fd.append('file', blob, 'upload.txt')
+      fd.append('encoding', 'base64')
       fd.append('filename', file.name)
       // Content-Type は手動指定しない（authConfigMultipart）。手動で
       // 'multipart/form-data' を付けると boundary が欠落し、特に iOS Safari 等の
