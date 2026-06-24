@@ -703,8 +703,24 @@ function SendTab({ showToast }) {
     setAnalyzeResult(null)
     setWizardFile(file.name)
     try {
+      // 一部のモバイル端末で、選択した PDF を元 File のまま multipart でストリーム
+      // 送信すると送信段階で失敗し "Network Error" になる（画像は成功する）。回避策:
+      //  1) ファイルを一度メモリに読み切ってから送る（クラウド実体の遅延読み込み失敗を排除。
+      //     読めなければ通信エラーでなく明確なメッセージを出す）
+      //  2) 拡張子/MIME(application/pdf)ベースの遮断を避けるため汎用名・汎用タイプで送り、
+      //     サーバ側で中身(マジックバイト)から種別判定させる
+      let buf
+      try {
+        buf = await file.arrayBuffer()
+      } catch {
+        showToast('error', 'ファイルを読み込めませんでした。端末本体に保存したファイルで再度お試しください。')
+        setWizardFile(null)
+        return // finally で uploading は解除される
+      }
       const fd = new FormData()
-      fd.append('file', file)
+      const blob = new Blob([buf], { type: 'application/octet-stream' })
+      fd.append('file', blob, 'upload.bin')
+      fd.append('filename', file.name)
       // Content-Type は手動指定しない（authConfigMultipart）。手動で
       // 'multipart/form-data' を付けると boundary が欠落し、特に iOS Safari 等の
       // モバイルブラウザでサーバ(multer)がファイルをパースできず解析に失敗する。
