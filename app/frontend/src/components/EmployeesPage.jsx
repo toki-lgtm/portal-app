@@ -13,7 +13,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { useToast } from '../lib/useToast'
 import { inputCls } from '../lib/ui'
 
@@ -485,9 +485,8 @@ function CertImportModal({ files, employees, quals, onClose, onSaved, showToast 
         try {
           const fd = new FormData()
           fd.append('cert', file)
-          const res = await axios.post(`${apiUrl}/api/qualifications/scan`, fd, {
-            headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
-          })
+          // Content-Type は手動指定しない（boundary 欠落でモバイルがアップロード失敗する）
+          const res = await axios.post(`${apiUrl}/api/qualifications/scan`, fd, authConfigMultipart())
           const records = res.data?.records || []
           for (const rec of records) {
             out.push({
@@ -1383,7 +1382,7 @@ function QualSection({ staffId, quals, canEdit, showToast }) {
       const res = await axios.post(
         `${apiUrl}/api/employees/${staffId}/qualifications/scan`,
         fd,
-        { headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' } }
+        authConfigMultipart()
       )
       const { extracted, matched_qualification_id, cert_image_path, cert_image_url } = res.data
       setDraft({

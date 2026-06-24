@@ -10,7 +10,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { inputCls } from '../lib/ui'
 
 // 対象アプリの選択肢（server.js の FEEDBACK_APP_LABELS と一致させる）
@@ -92,9 +92,7 @@ function SubmitModal({ onClose, onSubmitted, showToast }) {
       for (const file of files) {
         const fd = new FormData()
         fd.append('photo', file)
-        const res = await axios.post(`${apiUrl}/api/feedback/upload-photo`, fd, {
-          headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
-        })
+        const res = await axios.post(`${apiUrl}/api/feedback/upload-photo`, fd, authConfigMultipart())
         urls.push(res.data.url)
       }
       setShots((s) => [...s, ...urls])

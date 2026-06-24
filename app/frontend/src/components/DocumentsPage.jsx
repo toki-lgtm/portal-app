@@ -12,7 +12,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { useToast } from '../lib/useToast'
 import { inputCls } from '../lib/ui'
 
@@ -705,9 +705,10 @@ function SendTab({ showToast }) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await axios.post(`${apiUrl}/api/circulars/analyze`, fd, {
-        headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
-      })
+      // Content-Type は手動指定しない（authConfigMultipart）。手動で
+      // 'multipart/form-data' を付けると boundary が欠落し、特に iOS Safari 等の
+      // モバイルブラウザでサーバ(multer)がファイルをパースできず解析に失敗する。
+      const res = await axios.post(`${apiUrl}/api/circulars/analyze`, fd, authConfigMultipart())
       setAnalyzeResult(res.data)
     } catch (err) {
       // 真の原因を切り分けるための診断表示。

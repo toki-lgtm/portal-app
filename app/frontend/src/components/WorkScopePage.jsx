@@ -8,7 +8,7 @@ import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import { EULA_VERSION } from '../lib/workscopeEula'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 
 function fmtDateTime(d) {
   if (!d) return ''
@@ -148,9 +148,7 @@ export default function WorkScopePage({ onBack }) {
       fd.append('file', file)
       fd.append('version', version.trim())
       if (notes.trim()) fd.append('notes', notes.trim())
-      await axios.post(`${apiUrl}/api/admin/workscope/release`, fd, {
-        headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
-      })
+      await axios.post(`${apiUrl}/api/admin/workscope/release`, fd, authConfigMultipart())
       setFile(null)
       setVersion('')
       setNotes('')

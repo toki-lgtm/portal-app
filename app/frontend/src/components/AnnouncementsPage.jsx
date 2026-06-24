@@ -11,7 +11,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { useToast } from '../lib/useToast'
 import { inputCls } from '../lib/ui'
 
@@ -298,9 +298,7 @@ function AnnouncementFormModal({ item, onClose, onSaved, showToast }) {
       for (const file of files) {
         const fd = new FormData()
         fd.append('file', file)
-        const res = await axios.post(`${apiUrl}/api/announcements/upload-file`, fd, {
-          headers: { ...authConfig().headers, 'Content-Type': 'multipart/form-data' },
-        })
+        const res = await axios.post(`${apiUrl}/api/announcements/upload-file`, fd, authConfigMultipart())
         uploaded.push(res.data)
       }
       setForm((f) => ({ ...f, attachments: [...(f.attachments || []), ...uploaded] }))
