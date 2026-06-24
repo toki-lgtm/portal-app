@@ -710,7 +710,29 @@ function SendTab({ showToast }) {
       })
       setAnalyzeResult(res.data)
     } catch (err) {
-      showToast('error', err.response?.data?.error || 'ファイルの解析に失敗しました')
+      // 真の原因を切り分けるための診断表示。
+      // - サーバが JSON エラーを返した場合 → その message を表示
+      // - サーバ応答はあるが JSON でない(502/504/413 等の HTML 等) → ステータス＋本文断片
+      // - 応答自体が無い(CORS/タイムアウト/ネットワーク) → err.message
+      const status = err.response?.status
+      const serverMsg = err.response?.data?.error
+      let detail
+      if (serverMsg) {
+        detail = serverMsg
+      } else if (status) {
+        const body = typeof err.response?.data === 'string'
+          ? err.response.data.slice(0, 200)
+          : ''
+        detail = `サーバ応答 ${status}${body ? `: ${body}` : '（エラー本文なし）'}`
+      } else {
+        detail = `通信エラー: ${err.message}`
+      }
+      console.error('[circulars/analyze] failed', {
+        status,
+        data: err.response?.data,
+        message: err.message,
+      })
+      showToast('error', `解析に失敗: ${detail}`)
       setWizardFile(null)
     } finally {
       setUploading(false)
