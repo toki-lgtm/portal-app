@@ -30,9 +30,9 @@ git clone https://github.com/yourcompany/portal.git
 cd portal
 ```
 
-### 2. バックエンド設定
+### 2. バックエンド設定（別フォルダ 04.portal-api）
 ```bash
-cd app/backend
+cd ../04.portal-api
 cp .env.example .env
 # .env に以下を設定：
 # SUPABASE_URL=... (Supabase プロジェクト URL)
@@ -45,7 +45,7 @@ npm run dev
 
 ### 3. フロントエンド設定
 ```bash
-cd ../frontend
+cd app/frontend
 cp .env.example .env
 # .env に以下を設定：
 # VITE_GOOGLE_CLIENT_ID=...

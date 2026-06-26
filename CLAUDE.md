@@ -9,26 +9,25 @@
 
 ## ディレクトリ構成
 ```
-./app
-  ├── frontend/     React + Vite + Tailwind
-  ├── backend/      Node.js（Express）
-  └── migrations/   SQL スキーマ（将来）
-./render.yaml      Render デプロイ設定
-./README.md        セットアップガイド
+03.portal-app/        ← このフォルダ（フロントエンド）
+  └── app/frontend/   React + Vite + Tailwind + Electron
+04.portal-api/        ← バックエンド本体（Express + Supabase）※別フォルダ
 ```
+> 注: 以前 app/backend/ に古いスタブがありましたが、本番APIは 04.portal-api に一本化済み。
+> 旧スタブは 04.アプリ/_archive/03-portal-old-backend/ に退避。
 
 ## セットアップ
 ```bash
-# バックエンド
-cd app/backend
+# バックエンド（別フォルダ 04.portal-api）
+cd ../04.portal-api
 npm install
-cp .env.example .env  # Supabase 認証情報を設定
+cp .env.example .env  # Supabase / Google OAuth 認証情報を設定
 npm run dev
 
 # フロントエンド（別ターミナル）
-cd ../frontend
+cd app/frontend
 npm install
-cp .env.example .env  # Google OAuth 認証情報を設定
+cp .env.example .env  # VITE_API_URL / VITE_GOOGLE_CLIENT_ID を設定
 npm run dev
 ```
 
