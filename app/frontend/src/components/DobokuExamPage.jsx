@@ -143,49 +143,131 @@ function ReadTab({ showToast }) {
 }
 
 // ── 過去問タブ ───────────────────────────────────────────────
+// 過去問タブ: 分野を選んでから1問ずつ解く
 function PastTab({ showToast }) {
   const [loading, setLoading] = useState(true)
-  const [questions, setQuestions] = useState([])
+  const [all, setAll] = useState([])
   const [facets, setFacets] = useState({ parts: [], years: [] })
-  const [part, setPart] = useState('')
+  const [selParts, setSelParts] = useState(() => new Set())
   const [year, setYear] = useState('')
+  const [stage, setStage] = useState('select') // 'select' | 'quiz'
+  const [idx, setIdx] = useState(0)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const params = new URLSearchParams()
-      if (part) params.set('part', part)
-      if (year) params.set('year', year)
-      const { data } = await axios.get(`${apiUrl}/api/doboku/past-questions?${params}`, authConfig())
-      setQuestions(data.questions || [])
-      setFacets(data.facets || { parts: [], years: [] })
-    } catch (e) { showToast('error', '過去問の取得に失敗しました') }
-    finally { setLoading(false) }
-  }, [part, year, showToast])
+  // 過去問は全件まとめて取得し、分野/年度の絞り込みはフロントで行う
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const { data } = await axios.get(`${apiUrl}/api/doboku/past-questions`, authConfig())
+        setAll(data.questions || [])
+        setFacets(data.facets || { parts: [], years: [] })
+      } catch (e) { showToast('error', '過去問の取得に失敗しました') }
+      finally { setLoading(false) }
+    })()
+  }, [showToast])
 
-  useEffect(() => { load() }, [load])
+  // 選んだ分野・年度に該当する問題（1問ずつ表示する対象）
+  const quizList = useMemo(() => all.filter((q) =>
+    (selParts.size === 0 || selParts.has(q.part_no)) &&
+    (!year || q.year_label === year)
+  ), [all, selParts, year])
 
+  // 分野ごとの問題数
+  const countByPart = useMemo(() => {
+    const m = {}
+    for (const q of all) m[q.part_no] = (m[q.part_no] || 0) + 1
+    return m
+  }, [all])
+
+  const allSelected = facets.parts.length > 0 && selParts.size === facets.parts.length
+  const toggle = (pn) => setSelParts((prev) => {
+    const n = new Set(prev); n.has(pn) ? n.delete(pn) : n.add(pn); return n
+  })
+  const toggleAll = () => setSelParts(allSelected ? new Set() : new Set(facets.parts.map((p) => p.part_no)))
+
+  const start = () => {
+    if (!quizList.length) { showToast('error', '該当する過去問がありません'); return }
+    setIdx(0); setStage('quiz')
+  }
+
+  if (loading) return <Loading />
+
+  // ── 1問ずつ演習 ──
+  if (stage === 'quiz') {
+    const q = quizList[idx]
+    if (!q) { setStage('select'); return null }
+    const pct = Math.round(((idx + 1) / quizList.length) * 100)
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <button onClick={() => setStage('select')}
+            className="text-sm text-brand-600 font-semibold flex items-center gap-1">
+            <ArrowLeft size={15} /> 分野選択へ
+          </button>
+          <span className="text-sm text-slate-500 dark:text-slate-400">{idx + 1} / {quizList.length} 問</span>
+        </div>
+        <div className="h-1.5 bg-slate-100 dark:bg-ink-800 rounded-full overflow-hidden">
+          <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
+        </div>
+
+        <QuizQuestion key={q.id} q={q} showToast={showToast} />
+
+        <div className="flex justify-between pt-1">
+          <Button variant="secondary" disabled={idx === 0} onClick={() => setIdx((i) => i - 1)}>
+            <ArrowLeft size={16} /> 前へ
+          </Button>
+          {idx + 1 < quizList.length
+            ? <Button onClick={() => setIdx((i) => i + 1)}>次へ <ChevronRight size={16} /></Button>
+            : <Button onClick={() => setStage('select')}>分野選択に戻る</Button>}
+        </div>
+      </div>
+    )
+  }
+
+  // ── 分野選択画面 ──
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
-        <select className={inputCls} value={part} onChange={(e) => setPart(e.target.value)}>
-          <option value="">全分野</option>
-          {facets.parts.map((p) => <option key={p.part_no} value={p.part_no}>第{p.part_no}編 {p.part_name}</option>)}
-        </select>
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-slate-700 dark:text-slate-200">分野を選ぶ（複数可）</h3>
+        {facets.parts.length > 0 && (
+          <button onClick={toggleAll} className="text-sm text-brand-600 font-semibold hover:underline">
+            {allSelected ? '全解除' : '全選択'}
+          </button>
+        )}
+      </div>
+
+      {!facets.parts.length ? <Empty text="過去問データがまだ投入されていません。" /> : (
+        <Card className="divide-y divide-slate-100 dark:divide-ink-700 overflow-hidden">
+          {facets.parts.map((p) => (
+            <label key={p.part_no} className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50 dark:hover:bg-ink-700/50">
+              <input type="checkbox" checked={selParts.has(p.part_no)} onChange={() => toggle(p.part_no)}
+                className="w-4 h-4 accent-brand-600" />
+              <span className="flex-1 text-slate-800 dark:text-slate-100">第{p.part_no}編 {p.part_name}</span>
+              <span className="text-xs text-slate-400">{countByPart[p.part_no] || 0}問</span>
+            </label>
+          ))}
+        </Card>
+      )}
+
+      <div>
+        <label className="text-xs font-semibold text-slate-500">年度で絞る（任意）</label>
         <select className={inputCls} value={year} onChange={(e) => setYear(e.target.value)}>
           <option value="">全年度</option>
           {facets.years.map((y) => <option key={y} value={y}>{y}</option>)}
         </select>
       </div>
 
-      {loading ? <Loading /> : !questions.length ? <Empty text="該当する過去問がありません（データ未投入の可能性）。" />
-        : questions.map((q) => <PastQuestionCard key={q.id} q={q} showToast={showToast} />)}
+      <Button disabled={!quizList.length} onClick={start}>
+        この範囲で始める（{quizList.length}問）
+      </Button>
+      <p className="text-xs text-slate-400 flex items-center gap-1">
+        <FileText size={12} /> 選んだ分野の過去問を1問ずつ表示します。分野を選ばない場合は全分野が対象です。
+      </p>
     </div>
   )
 }
 
-function PastQuestionCard({ q, showToast }) {
-  const [open, setOpen] = useState(false)
+// 1問分の表示・採点（問題が変わると key により再マウントされ、前問の入力はリセットされる）
+function QuizQuestion({ q, showToast }) {
   const [blanks, setBlanks] = useState({})
   const [typed, setTyped] = useState('')
   const [result, setResult] = useState(null)
@@ -214,78 +296,71 @@ function PastQuestionCard({ q, showToast }) {
   }
 
   return (
-    <Card className="overflow-hidden">
-      <button onClick={() => setOpen(!open)} className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-ink-700/40">
-        <div className="flex items-center gap-2 mb-1 flex-wrap">
-          <Badge tone="neutral">第{q.part_no}編 No.{q.q_no}</Badge>
-          {q.year_label && <Badge tone="info">{q.year_label}</Badge>}
-          <Badge tone={q.q_type === 'blank' ? 'warning' : 'neutral'}>{q.q_type === 'blank' ? '穴埋め' : '記述'}</Badge>
-          {q.progress?.last_correct === true && <Badge tone="success">正</Badge>}
+    <Card className="p-4">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <Badge tone="neutral">第{q.part_no}編 No.{q.q_no}</Badge>
+        {q.year_label && <Badge tone="info">{q.year_label}</Badge>}
+        <Badge tone={q.q_type === 'blank' ? 'warning' : 'neutral'}>{q.q_type === 'blank' ? '穴埋め' : '記述'}</Badge>
+        {q.progress?.last_correct === true && <Badge tone="success">正</Badge>}
+      </div>
+
+      {q.image_url && <img src={q.image_url} alt="図" loading="lazy" className="w-full max-h-72 object-contain rounded-lg border mb-3 bg-white" />}
+      <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap mb-3">{q.stem}</p>
+
+      {/* 穴埋め: 記号ごとの入力 */}
+      {q.q_type === 'blank' && (
+        <div className="space-y-2 mb-3">
+          {marks.map((mk) => (
+            <div key={mk} className="flex items-center gap-2">
+              <span className="w-8 text-center font-semibold text-slate-500">（{mk}）</span>
+              <input className={inputCls} value={blanks[mk] || ''} disabled={!!result}
+                onChange={(e) => setBlanks({ ...blanks, [mk]: e.target.value })} />
+            </div>
+          ))}
         </div>
-        <p className="text-sm text-slate-700 dark:text-slate-200 line-clamp-2">{q.stem}</p>
-      </button>
+      )}
 
-      {open && (
-        <div className="px-4 pb-4 border-t border-slate-100 dark:border-ink-700 pt-3">
-          {q.image_url && <img src={q.image_url} alt="図" loading="lazy" className="w-full max-h-72 object-contain rounded-lg border mb-3 bg-white" />}
-          <p className="text-sm text-slate-800 dark:text-slate-100 whitespace-pre-wrap mb-3">{q.stem}</p>
+      {/* 自由記述: テキストエリア */}
+      {q.q_type === 'free' && (
+        <textarea className={`${inputCls} min-h-[100px]`} placeholder="解答を記述" value={typed}
+          disabled={!!result && !!ai} onChange={(e) => setTyped(e.target.value)} />
+      )}
 
-          {/* 穴埋め: 記号ごとの入力 */}
-          {q.q_type === 'blank' && (
-            <div className="space-y-2 mb-3">
-              {marks.map((mk) => (
-                <div key={mk} className="flex items-center gap-2">
-                  <span className="w-8 text-center font-semibold text-slate-500">（{mk}）</span>
-                  <input className={inputCls} value={blanks[mk] || ''} disabled={!!result}
-                    onChange={(e) => setBlanks({ ...blanks, [mk]: e.target.value })} />
+      <div className="flex gap-2 mt-3">
+        {!result && <Button onClick={grade} disabled={busy}>{busy ? <Loader2 className="animate-spin" size={16} /> : '採点・解答を見る'}</Button>}
+        {q.q_type === 'free' && <Button variant="secondary" onClick={aiGrade} disabled={busy}><Sparkles size={16} /> AIで採点</Button>}
+      </div>
+
+      {/* 採点結果 */}
+      {result && (
+        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-ink-700 space-y-2">
+          {result.q_type === 'blank' && (
+            <div className="space-y-1">
+              {result.blank_results?.map((b) => (
+                <div key={b.mark} className="flex items-center gap-2 text-sm">
+                  {b.correct ? <Check className="text-success-600" size={16} /> : <X className="text-danger-600" size={16} />}
+                  <span className="font-semibold">（{b.mark}）</span>
+                  <span className={b.correct ? 'text-success-700' : 'text-danger-700'}>あなた: {b.your || '（空欄）'}</span>
+                  {!b.correct && <span className="text-slate-600">正解: {b.answer}</span>}
                 </div>
               ))}
             </div>
           )}
-
-          {/* 自由記述: テキストエリア */}
-          {q.q_type === 'free' && (
-            <textarea className={`${inputCls} min-h-[100px]`} placeholder="解答を記述" value={typed}
-              disabled={!!result && !!ai} onChange={(e) => setTyped(e.target.value)} />
-          )}
-
-          <div className="flex gap-2 mt-3">
-            {!result && <Button onClick={grade} disabled={busy}>{busy ? <Loader2 className="animate-spin" size={16} /> : '採点・解答を見る'}</Button>}
-            {q.q_type === 'free' && <Button variant="secondary" onClick={aiGrade} disabled={busy}><Sparkles size={16} /> AIで採点</Button>}
-          </div>
-
-          {/* 採点結果 */}
-          {result && (
-            <div className="mt-4 pt-3 border-t border-slate-200 dark:border-ink-700 space-y-2">
-              {result.q_type === 'blank' && (
-                <div className="space-y-1">
-                  {result.blank_results?.map((b) => (
-                    <div key={b.mark} className="flex items-center gap-2 text-sm">
-                      {b.correct ? <Check className="text-success-600" size={16} /> : <X className="text-danger-600" size={16} />}
-                      <span className="font-semibold">（{b.mark}）</span>
-                      <span className={b.correct ? 'text-success-700' : 'text-danger-700'}>あなた: {b.your || '（空欄）'}</span>
-                      {!b.correct && <span className="text-slate-600">正解: {b.answer}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {result.answer_text && (
-                <div className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-lg p-3">
-                  <span className="font-semibold">模範解答: </span>{result.answer_text}
-                </div>
-              )}
-              {result.explanation && (
-                <div className="text-sm text-brand-700 dark:text-brand-300 whitespace-pre-wrap bg-brand-50 dark:bg-brand-500/10 rounded-lg p-3">
-                  {result.explanation}
-                </div>
-              )}
+          {result.answer_text && (
+            <div className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap bg-slate-50 dark:bg-ink-900/40 rounded-lg p-3">
+              <span className="font-semibold">模範解答: </span>{result.answer_text}
             </div>
           )}
-
-          {/* AI採点結果 */}
-          {ai && <AiResult ai={ai} />}
+          {result.explanation && (
+            <div className="text-sm text-brand-700 dark:text-brand-300 whitespace-pre-wrap bg-brand-50 dark:bg-brand-500/10 rounded-lg p-3">
+              {result.explanation}
+            </div>
+          )}
         </div>
       )}
+
+      {/* AI採点結果 */}
+      {ai && <AiResult ai={ai} />}
     </Card>
   )
 }
