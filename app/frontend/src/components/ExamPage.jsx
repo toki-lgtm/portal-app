@@ -502,7 +502,7 @@ export default function ExamPage({ onBack }) {
                                   <div key={s.round} className="flex items-center gap-2 text-xs">
                                     <span className="w-12 text-slate-500 dark:text-slate-300 shrink-0 font-medium">{s.round}回目</span>
                                     <span className="w-20 text-slate-400 shrink-0">{label}</span>
-                                    <span className="w-12 text-right text-slate-400 shrink-0">{s.count}問</span>
+                                    <span className="w-24 text-right text-slate-500 dark:text-slate-300 shrink-0">{s.count}問中{s.correct}正解</span>
                                     <div className="flex-1 bg-slate-100 dark:bg-ink-800 rounded h-3 overflow-hidden">
                                       <div className={`h-full ${barColor(s.rate)}`} style={{ width: `${s.rate}%` }} />
                                     </div>
