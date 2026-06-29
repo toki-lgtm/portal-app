@@ -8,6 +8,7 @@ import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
+import DobokuExamPage from './DobokuExamPage'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { inputCls } from '../lib/ui'
 import { useToast } from '../lib/useToast'
@@ -76,9 +77,13 @@ export default function ExamPage({ onBack }) {
     }
   }, [showToast])
 
-  useEffect(() => { if (subjectId) loadChapters(subjectId) }, [subjectId, loadChapters])
-
   const subject = subjects.find((s) => s.id === subjectId)
+
+  // 第二次検定（記述式）は章演習をしないので章取得をスキップ
+  useEffect(() => {
+    if (subjectId && subject?.kind !== 'doboku-2ji') loadChapters(subjectId)
+  }, [subjectId, subject, loadChapters])
+
   const allSelected = chapters.length > 0 && selected.size === chapters.length
 
   const toggleChapter = (id) => {
@@ -165,6 +170,19 @@ export default function ExamPage({ onBack }) {
       <h1 className="text-lg font-bold text-slate-800 dark:text-slate-100">{title}</h1>
     </div>
   )
+
+  // 第二次検定（記述式）は専用画面へ。入口は資格学習のまま、システムは別建て。
+  if (subject?.kind === 'doboku-2ji') {
+    return (
+      <DobokuExamPage
+        subject={subject}
+        subjects={subjects}
+        subjectId={subjectId}
+        onSelectSubject={(id) => { setSubjectId(id); setSelected(new Set()) }}
+        onBack={onBack}
+      />
+    )
+  }
 
   if (loading && stage === 'home') {
     return (
