@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, GraduationCap, Check, X, ChevronRight, Loader2,
-  RefreshCw, Trophy, AlertTriangle, BookOpen, Target, Sparkles,
+  RefreshCw, Trophy, AlertTriangle, BookOpen, Target, Sparkles, BarChart3,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -38,8 +38,10 @@ export default function ExamPage({ onBack }) {
   const [overall, setOverall] = useState(null)
   const [selected, setSelected] = useState(() => new Set())
 
-  // 'home' | 'quiz' | 'summary'
+  // 'home' | 'quiz' | 'summary' | 'analytics'
   const [stage, setStage] = useState('home')
+  const [analytics, setAnalytics] = useState(null) // 分析データ
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false)
   const [session, setSession] = useState(null) // { mode, questions }
   const [idx, setIdx] = useState(0)
   const [answered, setAnswered] = useState(null) // 現在の問題の採点結果
@@ -117,6 +119,21 @@ export default function ExamPage({ onBack }) {
       showToast('error', e.response?.data?.error || '開始に失敗しました')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  // 分析ビューを開く
+  const openAnalytics = async () => {
+    setLoadingAnalytics(true)
+    setStage('analytics')
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/exam/subjects/${subjectId}/analytics`, authConfig())
+      setAnalytics(data)
+    } catch (e) {
+      showToast('error', '分析データの取得に失敗しました')
+      setStage('home')
+    } finally {
+      setLoadingAnalytics(false)
     }
   }
 
@@ -364,6 +381,114 @@ export default function ExamPage({ onBack }) {
     )
   }
 
+  // ── 分析ビュー ─────────────────────────────────────────────
+  if (stage === 'analytics') {
+    const a = analytics
+    const maxDay = a?.daily?.length ? Math.max(...a.daily.map((d) => d.count)) : 0
+    const recentDaily = (a?.daily || []).slice(-21) // 直近21日分
+    const rateTone = (r) => (r == null ? 'neutral' : r >= 70 ? 'success' : r >= 40 ? 'warning' : 'danger')
+    const barColor = (r) => (r >= 70 ? 'bg-success-500' : r >= 40 ? 'bg-warning-500' : 'bg-danger-500')
+    return (
+      <div className="max-w-3xl mx-auto p-4">
+        <Header title={`学習分析${subject ? '：' + subject.name : ''}`} onBackClick={() => setStage('home')} />
+        {loadingAnalytics ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin mr-2" /> 集計中…
+          </div>
+        ) : !a || !a.summary ? (
+          <Card className="p-8 text-center text-slate-500">まだ学習データがありません。</Card>
+        ) : (
+          <div className="space-y-4">
+            {/* サマリ */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold text-brand-600">{a.summary.latest_correct_rate ?? '—'}{a.summary.latest_correct_rate != null && '%'}</div>
+                <div className="text-xs text-slate-400 mt-1">最新の正答率</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold text-slate-700 dark:text-slate-200">{a.summary.lifetime_correct_rate ?? '—'}{a.summary.lifetime_correct_rate != null && '%'}</div>
+                <div className="text-xs text-slate-400 mt-1">通算の正答率</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold text-slate-700 dark:text-slate-200">{a.summary.total_answers}</div>
+                <div className="text-xs text-slate-400 mt-1">のべ回答数</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold text-slate-700 dark:text-slate-200">{a.summary.study_days}</div>
+                <div className="text-xs text-slate-400 mt-1">学習日数</div>
+              </Card>
+            </div>
+            <p className="text-xs text-slate-400 -mt-1">
+              進捗 {a.summary.distinct_answered}/{a.summary.total_questions} 問（最新＝各問を最後に解いた結果／通算＝全挑戦の平均。履歴はすべて蓄積しています）
+            </p>
+
+            {/* 日別の学習量と正答率 */}
+            {recentDaily.length > 0 && (
+              <Card className="p-5">
+                <h3 className="font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+                  <BarChart3 size={16} className="text-brand-600" /> 日別の学習量と正答率（直近{recentDaily.length}日）
+                </h3>
+                <div className="space-y-1.5">
+                  {recentDaily.map((d) => (
+                    <div key={d.date} className="flex items-center gap-2 text-xs">
+                      <span className="w-12 text-slate-400 shrink-0">{d.date.slice(5)}</span>
+                      <div className="flex-1 bg-slate-100 dark:bg-ink-800 rounded h-4 overflow-hidden">
+                        <div className={`h-full ${barColor(d.rate)}`} style={{ width: `${maxDay ? (d.count / maxDay) * 100 : 0}%` }} />
+                      </div>
+                      <span className="w-10 text-right text-slate-500 shrink-0">{d.count}問</span>
+                      <span className="w-10 text-right text-slate-400 shrink-0">{d.rate}%</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">バーの長さ＝回答数、色＝その日の正答率（緑70%↑／橙40%↑／赤）</p>
+              </Card>
+            )}
+
+            {/* 章別の最新正答率 */}
+            <Card className="p-5">
+              <h3 className="font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+                <Target size={16} className="text-brand-600" /> 章別の正答率（最新）
+              </h3>
+              <div className="space-y-1.5">
+                {a.byChapter.map((c) => (
+                  <div key={c.chapter_no} className="flex items-center gap-2 text-xs">
+                    <span className="w-6 text-slate-400 shrink-0">{c.chapter_no}</span>
+                    <span className="flex-1 truncate text-slate-700 dark:text-slate-200">{c.title}</span>
+                    <div className="w-24 bg-slate-100 dark:bg-ink-800 rounded h-3 overflow-hidden shrink-0">
+                      {c.rate != null && <div className={`h-full ${barColor(c.rate)}`} style={{ width: `${c.rate}%` }} />}
+                    </div>
+                    <Badge tone={rateTone(c.rate)}>{c.rate == null ? '未' : c.rate + '%'}</Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* 苦手問題 */}
+            {a.weak.length > 0 && (
+              <Card className="p-5">
+                <h3 className="font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+                  <AlertTriangle size={16} className="text-danger-500" /> 苦手な問題 TOP{a.weak.length}（誤答率順）
+                </h3>
+                <div className="space-y-2">
+                  {a.weak.map((w) => (
+                    <div key={w.question_id} className="flex items-start gap-2 text-sm">
+                      <Badge tone="danger">{w.miss_rate}%</Badge>
+                      <div className="flex-1">
+                        <span className="text-slate-700 dark:text-slate-200">{w.stem}…</span>
+                        <span className="text-xs text-slate-400 ml-1">（第{w.chapter_no}問 No.{w.q_no}／{w.attempts}回中{w.attempts - w.correct_count}回誤答）</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+        {toast && <Toast toast={toast} />}
+      </div>
+    )
+  }
+
   // ── ホーム（科目情報＋章選択＋モード） ────────────────────────
   return (
     <div className="max-w-3xl mx-auto p-4">
@@ -394,6 +519,11 @@ export default function ExamPage({ onBack }) {
                 {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             )}
+            <div className="mt-3">
+              <Button variant="secondary" onClick={openAnalytics}>
+                <BarChart3 size={16} /> 学習分析を見る
+              </Button>
+            </div>
           </Card>
 
           {/* 章選択 */}
