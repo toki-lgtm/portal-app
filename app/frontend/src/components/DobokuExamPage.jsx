@@ -335,7 +335,12 @@ function QuizQuestion({ q, showToast, onToggleReview }) {
         <Badge tone="neutral">第{q.part_no}編 No.{q.q_no}</Badge>
         {q.year_label && <Badge tone="info">{q.year_label}</Badge>}
         <Badge tone={q.q_type === 'blank' ? 'warning' : 'neutral'}>{q.q_type === 'blank' ? '穴埋め' : '記述'}</Badge>
+        {/* 穴埋め=正誤の記録 / 記述=AI判定の点数の記録 を一目で示す */}
         {q.progress?.last_correct === true && <Badge tone="success">正</Badge>}
+        {q.progress?.last_correct === false && <Badge tone="danger">誤</Badge>}
+        {q.q_type === 'free' && q.progress?.ai_score != null && (
+          <Badge tone="info"><Sparkles size={11} /> AI {q.progress.ai_score}点</Badge>
+        )}
         <button onClick={toggleReview} disabled={flagBusy}
           className={`ml-auto flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg border transition disabled:opacity-50 ${
             reviewFlag
