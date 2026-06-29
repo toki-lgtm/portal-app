@@ -47,16 +47,15 @@ export default function ExamPage({ onBack }) {
   const [results, setResults] = useState([]) // [{correct}]
   const [submitting, setSubmitting] = useState(false)
 
-  // 科目一覧 → 最初の科目を選択
+  // 科目一覧を取得（自動選択はせず、まず科目選択画面を出す）
   useEffect(() => {
     ;(async () => {
       try {
         const { data } = await axios.get(`${apiUrl}/api/exam/subjects`, authConfig())
         setSubjects(data || [])
-        if (data && data.length) setSubjectId(data[0].id)
-        else setLoading(false)
       } catch (e) {
         showToast('error', '科目の取得に失敗しました')
+      } finally {
         setLoading(false)
       }
     })()
@@ -160,6 +159,13 @@ export default function ExamPage({ onBack }) {
     loadChapters(subjectId)
   }
 
+  // 科目選択画面へ戻る（科目内の状態をリセット）
+  const backToPicker = () => {
+    setSubjectId(null); setStage('home'); setSession(null)
+    setSelected(new Set()); setChapters([]); setOverall(null)
+    setAnswered(null); setTyped(''); setResults([])
+  }
+
   // ── ヘッダー ───────────────────────────────────────────────
   const Header = ({ title, onBackClick }) => (
     <div className="flex items-center gap-3 mb-5">
@@ -171,7 +177,50 @@ export default function ExamPage({ onBack }) {
     </div>
   )
 
-  // 第二次検定（記述式）は専用画面へ。入口は資格学習のまま、システムは別建て。
+  // 初回ロード中（科目一覧の取得）
+  if (loading && !subjectId) {
+    return (
+      <div className="max-w-3xl mx-auto p-4">
+        <Header title="資格学習" onBackClick={onBack} />
+        <div className="flex items-center justify-center py-20 text-slate-400">
+          <Loader2 className="animate-spin mr-2" /> 読み込み中…
+        </div>
+      </div>
+    )
+  }
+
+  // 科目未選択 → 科目選択画面（資格学習の入口）
+  if (!subjectId) {
+    return (
+      <div className="max-w-3xl mx-auto p-4">
+        <Header title="資格学習" onBackClick={onBack} />
+        <h2 className="font-semibold text-slate-700 dark:text-slate-200 mb-3">学習する資格を選んでください</h2>
+        {subjects.length === 0 ? (
+          <Card className="p-8 text-center text-slate-500">
+            利用できる資格がありません。管理者にアクセス権の付与を依頼してください。
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {subjects.map((s) => (
+              <button key={s.id} onClick={() => { setSubjectId(s.id); setSelected(new Set()); setStage('home') }}
+                className="text-left p-5 rounded-2xl border border-slate-200 dark:border-ink-700 hover:border-brand-400 hover:bg-brand-50 dark:hover:bg-ink-700/50 transition">
+                <div className="flex items-center gap-2 mb-2">
+                  <GraduationCap className="text-brand-600" size={20} />
+                  <Badge tone={s.kind === 'doboku-2ji' ? 'info' : 'neutral'}>{s.kind === 'doboku-2ji' ? '記述式' : '4択'}</Badge>
+                </div>
+                <h3 className="font-bold text-slate-800 dark:text-slate-100">{s.name}</h3>
+                {s.source && <p className="text-xs text-slate-400 mt-1">{s.source}</p>}
+                <span className="mt-3 inline-flex items-center text-sm text-brand-600 font-semibold">開く <ChevronRight size={15} /></span>
+              </button>
+            ))}
+          </div>
+        )}
+        {toast && <Toast toast={toast} />}
+      </div>
+    )
+  }
+
+  // 第二次検定（記述式）は専用画面へ。戻ると科目選択画面に戻る。
   if (subject?.kind === 'doboku-2ji') {
     return (
       <DobokuExamPage
@@ -179,7 +228,7 @@ export default function ExamPage({ onBack }) {
         subjects={subjects}
         subjectId={subjectId}
         onSelectSubject={(id) => { setSubjectId(id); setSelected(new Set()) }}
-        onBack={onBack}
+        onBack={backToPicker}
       />
     )
   }
@@ -187,7 +236,7 @@ export default function ExamPage({ onBack }) {
   if (loading && stage === 'home') {
     return (
       <div className="max-w-3xl mx-auto p-4">
-        <Header title="資格学習" onBackClick={onBack} />
+        <Header title="資格学習" onBackClick={backToPicker} />
         <div className="flex items-center justify-center py-20 text-slate-400">
           <Loader2 className="animate-spin mr-2" /> 読み込み中…
         </div>
@@ -318,13 +367,7 @@ export default function ExamPage({ onBack }) {
   // ── ホーム（科目情報＋章選択＋モード） ────────────────────────
   return (
     <div className="max-w-3xl mx-auto p-4">
-      <Header title="資格学習" onBackClick={onBack} />
-
-      {subjects.length === 0 && (
-        <Card className="p-8 text-center text-slate-500">
-          利用できる資格がありません。管理者にアクセス権の付与を依頼してください。
-        </Card>
-      )}
+      <Header title="資格学習" onBackClick={backToPicker} />
 
       {subject && (
         <>
