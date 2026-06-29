@@ -42,6 +42,9 @@ export default function ExamPage({ onBack }) {
   const [stage, setStage] = useState('home')
   const [analytics, setAnalytics] = useState(null) // 分析データ
   const [loadingAnalytics, setLoadingAnalytics] = useState(false)
+  const [expandedChap, setExpandedChap] = useState(null) // 展開中の章id
+  const [chapHist, setChapHist] = useState({}) // { [chapId]: sessions[] }
+  const [loadingHistId, setLoadingHistId] = useState(null)
   const [session, setSession] = useState(null) // { mode, questions }
   const [idx, setIdx] = useState(0)
   const [answered, setAnswered] = useState(null) // 現在の問題の採点結果
@@ -134,6 +137,24 @@ export default function ExamPage({ onBack }) {
       setStage('home')
     } finally {
       setLoadingAnalytics(false)
+    }
+  }
+
+  // 章をタップ → 回ごとの推移を取得/開閉
+  const toggleChapHistory = async (cid) => {
+    if (expandedChap === cid) { setExpandedChap(null); return }
+    setExpandedChap(cid)
+    if (!chapHist[cid]) {
+      setLoadingHistId(cid)
+      try {
+        const { data } = await axios.get(`${apiUrl}/api/exam/subjects/${subjectId}/chapters/${cid}/history`, authConfig())
+        setChapHist((m) => ({ ...m, [cid]: data.sessions || [] }))
+      } catch (e) {
+        showToast('error', '推移の取得に失敗しました')
+        setExpandedChap(null)
+      } finally {
+        setLoadingHistId(null)
+      }
     }
   }
 
@@ -444,22 +465,62 @@ export default function ExamPage({ onBack }) {
               </Card>
             )}
 
-            {/* 章別の最新正答率 */}
+            {/* 章別の最新正答率（タップで回ごとの推移） */}
             <Card className="p-5">
-              <h3 className="font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+              <h3 className="font-semibold text-slate-700 dark:text-slate-200 mb-1 flex items-center gap-2">
                 <Target size={16} className="text-brand-600" /> 章別の正答率（最新）
               </h3>
-              <div className="space-y-1.5">
-                {a.byChapter.map((c) => (
-                  <div key={c.chapter_no} className="flex items-center gap-2 text-xs">
-                    <span className="w-6 text-slate-400 shrink-0">{c.chapter_no}</span>
-                    <span className="flex-1 truncate text-slate-700 dark:text-slate-200">{c.title}</span>
-                    <div className="w-24 bg-slate-100 dark:bg-ink-800 rounded h-3 overflow-hidden shrink-0">
-                      {c.rate != null && <div className={`h-full ${barColor(c.rate)}`} style={{ width: `${c.rate}%` }} />}
+              <p className="text-[11px] text-slate-400 mb-3">章をタップすると「何回目で正答率がどう変わったか」を表示します。</p>
+              <div className="divide-y divide-slate-100 dark:divide-ink-700">
+                {a.byChapter.map((c) => {
+                  const open = expandedChap === c.id
+                  const hist = chapHist[c.id]
+                  return (
+                    <div key={c.id}>
+                      <button onClick={() => toggleChapHistory(c.id)}
+                        className="w-full flex items-center gap-2 text-xs py-2 hover:bg-slate-50 dark:hover:bg-ink-700/40 rounded-lg px-1">
+                        <ChevronRight size={14} className={`text-slate-400 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
+                        <span className="w-6 text-slate-400 shrink-0">{c.chapter_no}</span>
+                        <span className="flex-1 truncate text-left text-slate-700 dark:text-slate-200">{c.title}</span>
+                        <div className="w-20 bg-slate-100 dark:bg-ink-800 rounded h-3 overflow-hidden shrink-0">
+                          {c.rate != null && <div className={`h-full ${barColor(c.rate)}`} style={{ width: `${c.rate}%` }} />}
+                        </div>
+                        <Badge tone={rateTone(c.rate)}>{c.rate == null ? '未' : c.rate + '%'}</Badge>
+                      </button>
+                      {open && (
+                        <div className="pl-7 pr-1 pb-3">
+                          {loadingHistId === c.id ? (
+                            <div className="flex items-center text-xs text-slate-400 py-2"><Loader2 className="animate-spin mr-2" size={14} /> 読み込み中…</div>
+                          ) : !hist || hist.length === 0 ? (
+                            <div className="text-xs text-slate-400 py-2">まだ学習記録がありません。</div>
+                          ) : (
+                            <div className="space-y-1.5 pt-1">
+                              {hist.map((s) => {
+                                const d = new Date(new Date(s.start).getTime() + 9 * 3600 * 1000)
+                                const label = `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+                                return (
+                                  <div key={s.round} className="flex items-center gap-2 text-xs">
+                                    <span className="w-12 text-slate-500 dark:text-slate-300 shrink-0 font-medium">{s.round}回目</span>
+                                    <span className="w-20 text-slate-400 shrink-0">{label}</span>
+                                    <span className="w-12 text-right text-slate-400 shrink-0">{s.count}問</span>
+                                    <div className="flex-1 bg-slate-100 dark:bg-ink-800 rounded h-3 overflow-hidden">
+                                      <div className={`h-full ${barColor(s.rate)}`} style={{ width: `${s.rate}%` }} />
+                                    </div>
+                                    <Badge tone={rateTone(s.rate)}>{s.rate}%</Badge>
+                                  </div>
+                                )
+                              })}
+                              <p className="text-[11px] text-slate-400 pt-1">
+                                計{hist.length}回／最新 {hist[hist.length - 1].rate}%
+                                {hist[hist.length - 1].rate >= 100 ? '（達成）' : ''}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <Badge tone={rateTone(c.rate)}>{c.rate == null ? '未' : c.rate + '%'}</Badge>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </Card>
 
