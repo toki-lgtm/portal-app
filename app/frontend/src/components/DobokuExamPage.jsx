@@ -8,6 +8,7 @@ import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
+import Markdown from './ui/Markdown'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { inputCls } from '../lib/ui'
 import { useToast } from '../lib/useToast'
@@ -120,9 +121,9 @@ function ReadTab({ showToast }) {
                   </button>
                   {openSec === s.id && (
                     <div className="px-4 pb-4">
-                      <div className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed bg-slate-50 dark:bg-ink-900/40 rounded-lg p-3">
+                      <Markdown className="bg-slate-50 dark:bg-ink-900/40 rounded-lg px-4 py-3" >
                         {s.body_md}
-                      </div>
+                      </Markdown>
                       {s.figures?.map((f) => (
                         <figure key={f.id} className="mt-3">
                           <img src={f.image_url} alt={f.caption || '図'} loading="lazy"
