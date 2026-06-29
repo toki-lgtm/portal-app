@@ -197,7 +197,13 @@ function PastTab({ showToast }) {
 
   const start = (list) => {
     if (!list.length) { showToast('error', '該当する過去問がありません'); return }
-    setSession(list); setIdx(0); setStage('quiz')
+    // 毎回ランダム順で出題（Fisher–Yatesで元配列を壊さずシャッフル）
+    const shuffled = [...list]
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+    }
+    setSession(shuffled); setIdx(0); setStage('quiz')
   }
 
   if (loading) return <Loading />
