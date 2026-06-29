@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, HardHat, Loader2, BookOpen, FileText, PenLine, Library,
-  ChevronDown, ChevronRight, Check, X, Sparkles, Plus, Trash2, Save,
+  ChevronDown, ChevronRight, Check, X, Sparkles, Plus, Trash2, Save, Flag,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -152,6 +152,7 @@ function PastTab({ showToast }) {
   const [year, setYear] = useState('')
   const [stage, setStage] = useState('select') // 'select' | 'quiz'
   const [idx, setIdx] = useState(0)
+  const [session, setSession] = useState([]) // 演習中に固定する問題リスト（途中でフラグを外しても並びは変えない）
 
   // 過去問は全件まとめて取得し、分野/年度の絞り込みはフロントで行う
   useEffect(() => {
@@ -165,11 +166,14 @@ function PastTab({ showToast }) {
     })()
   }, [showToast])
 
-  // 選んだ分野・年度に該当する問題（1問ずつ表示する対象）
-  const quizList = useMemo(() => all.filter((q) =>
+  // 選んだ分野・年度に該当する問題（開始前のプレビュー件数）
+  const rangeList = useMemo(() => all.filter((q) =>
     (selParts.size === 0 || selParts.has(q.part_no)) &&
     (!year || q.year_label === year)
   ), [all, selParts, year])
+
+  // 「要復習」フラグが付いている問題
+  const reviewList = useMemo(() => all.filter((q) => q.progress?.needs_review), [all])
 
   // 分野ごとの問題数
   const countByPart = useMemo(() => {
@@ -184,18 +188,25 @@ function PastTab({ showToast }) {
   })
   const toggleAll = () => setSelParts(allSelected ? new Set() : new Set(facets.parts.map((p) => p.part_no)))
 
-  const start = () => {
-    if (!quizList.length) { showToast('error', '該当する過去問がありません'); return }
-    setIdx(0); setStage('quiz')
+  // 要復習フラグの変更を all（選択画面の件数）と session（演習中の表示）の両方へ反映
+  const applyReviewFlag = useCallback((qId, val) => {
+    const upd = (q) => q.id === qId ? { ...q, progress: { ...(q.progress || {}), needs_review: val } } : q
+    setAll((prev) => prev.map(upd))
+    setSession((prev) => prev.map(upd))
+  }, [])
+
+  const start = (list) => {
+    if (!list.length) { showToast('error', '該当する過去問がありません'); return }
+    setSession(list); setIdx(0); setStage('quiz')
   }
 
   if (loading) return <Loading />
 
   // ── 1問ずつ演習 ──
   if (stage === 'quiz') {
-    const q = quizList[idx]
+    const q = session[idx]
     if (!q) { setStage('select'); return null }
-    const pct = Math.round(((idx + 1) / quizList.length) * 100)
+    const pct = Math.round(((idx + 1) / session.length) * 100)
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between">
@@ -203,19 +214,19 @@ function PastTab({ showToast }) {
             className="text-sm text-brand-600 font-semibold flex items-center gap-1">
             <ArrowLeft size={15} /> 分野選択へ
           </button>
-          <span className="text-sm text-slate-500 dark:text-slate-400">{idx + 1} / {quizList.length} 問</span>
+          <span className="text-sm text-slate-500 dark:text-slate-400">{idx + 1} / {session.length} 問</span>
         </div>
         <div className="h-1.5 bg-slate-100 dark:bg-ink-800 rounded-full overflow-hidden">
           <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
         </div>
 
-        <QuizQuestion key={q.id} q={q} showToast={showToast} />
+        <QuizQuestion key={q.id} q={q} showToast={showToast} onToggleReview={applyReviewFlag} />
 
         <div className="flex justify-between pt-1">
           <Button variant="secondary" disabled={idx === 0} onClick={() => setIdx((i) => i - 1)}>
             <ArrowLeft size={16} /> 前へ
           </Button>
-          {idx + 1 < quizList.length
+          {idx + 1 < session.length
             ? <Button onClick={() => setIdx((i) => i + 1)}>次へ <ChevronRight size={16} /></Button>
             : <Button onClick={() => setStage('select')}>分野選択に戻る</Button>}
         </div>
@@ -256,24 +267,47 @@ function PastTab({ showToast }) {
         </select>
       </div>
 
-      <Button disabled={!quizList.length} onClick={start}>
-        この範囲で始める（{quizList.length}問）
+      <Button disabled={!rangeList.length} onClick={() => start(rangeList)}>
+        この範囲で始める（{rangeList.length}問）
       </Button>
+
+      {reviewList.length > 0 && (
+        <Button variant="secondary" onClick={() => start(reviewList)}>
+          <Flag size={16} /> 要復習だけで始める（{reviewList.length}問）
+        </Button>
+      )}
+
       <p className="text-xs text-slate-400 flex items-center gap-1">
         <FileText size={12} /> 選んだ分野の過去問を1問ずつ表示します。分野を選ばない場合は全分野が対象です。
+      </p>
+      <p className="text-xs text-slate-400 flex items-center gap-1">
+        <Flag size={12} /> 各問題の「要復習」を押すと印が付き、上の「要復習だけで始める」で集中的に解き直せます。
       </p>
     </div>
   )
 }
 
 // 1問分の表示・採点（問題が変わると key により再マウントされ、前問の入力はリセットされる）
-function QuizQuestion({ q, showToast }) {
+function QuizQuestion({ q, showToast, onToggleReview }) {
   const [blanks, setBlanks] = useState({})
   const [typed, setTyped] = useState('')
   const [result, setResult] = useState(null)
   const [ai, setAi] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [reviewFlag, setReviewFlag] = useState(!!q.progress?.needs_review)
+  const [flagBusy, setFlagBusy] = useState(false)
   const marks = q.q_type === 'blank' ? extractBlankMarks(q.stem) : []
+
+  const toggleReview = async () => {
+    const next = !reviewFlag
+    setFlagBusy(true)
+    try {
+      await axios.post(`${apiUrl}/api/doboku/past-questions/${q.id}/review-flag`, { needs_review: next }, authConfig())
+      setReviewFlag(next)
+      onToggleReview?.(q.id, next)
+    } catch (e) { showToast('error', '要復習の更新に失敗しました') }
+    finally { setFlagBusy(false) }
+  }
 
   const grade = async () => {
     setBusy(true)
@@ -302,6 +336,14 @@ function QuizQuestion({ q, showToast }) {
         {q.year_label && <Badge tone="info">{q.year_label}</Badge>}
         <Badge tone={q.q_type === 'blank' ? 'warning' : 'neutral'}>{q.q_type === 'blank' ? '穴埋め' : '記述'}</Badge>
         {q.progress?.last_correct === true && <Badge tone="success">正</Badge>}
+        <button onClick={toggleReview} disabled={flagBusy}
+          className={`ml-auto flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-lg border transition disabled:opacity-50 ${
+            reviewFlag
+              ? 'bg-warning-100 text-warning-700 border-warning-400 dark:bg-warning-500/15 dark:text-warning-400 dark:border-warning-500/40'
+              : 'text-slate-400 border-slate-200 dark:border-ink-700 hover:text-warning-600 hover:border-warning-300'}`}>
+          {flagBusy ? <Loader2 className="animate-spin" size={13} /> : <Flag size={13} className={reviewFlag ? 'fill-warning-500' : ''} />}
+          {reviewFlag ? '要復習' : '要復習にする'}
+        </button>
       </div>
 
       {q.image_url && <img src={q.image_url} alt="図" loading="lazy" className="w-full max-h-72 object-contain rounded-lg border mb-3 bg-white" />}
