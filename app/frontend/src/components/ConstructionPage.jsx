@@ -5,6 +5,7 @@ import {
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
   Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
   BarChart3, FileSpreadsheet, ChevronDown, GitBranch, CheckCircle2, RefreshCw,
+  Camera,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -112,7 +113,7 @@ function ProgressBar({ done, total }) {
 }
 
 export default function ConstructionPage({ onBack }) {
-  const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist'
+  const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist' | 'photos'
   const [projects, setProjects] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -304,6 +305,24 @@ export default function ConstructionPage({ onBack }) {
     )
   }
 
+  // ── 工事写真ビュー ──
+  if (view === 'photos') {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <button onClick={() => setView('detail')}
+          className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+          <ArrowLeft className="w-4 h-4" /> 工事詳細へ
+        </button>
+        {detailLoading || !detail ? (
+          <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+        ) : (
+          <PhotoBody detail={detail} notify={notify} />
+        )}
+        <Toast toast={toast} />
+      </div>
+    )
+  }
+
   // ── 詳細ビュー ──
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
@@ -322,6 +341,7 @@ export default function ConstructionPage({ onBack }) {
           onDelete={() => deleteProject(detail)}
           notify={notify}
           onOpenChecklist={() => setView('checklist')}
+          onOpenPhotos={() => setView('photos')}
         />
       )}
 
@@ -355,7 +375,7 @@ function KpiCard({ icon, label, value, tone }) {
 }
 
 // ── 詳細本体（工事メタ＋フェーズ別書類チェックリスト）──
-function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist }) {
+function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist, onOpenPhotos }) {
   const docs = detail.documents || []
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
   const [reflectBusy, setReflectBusy] = useState(false)
@@ -446,6 +466,19 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
             <span className="text-xs text-slate-500 shrink-0">{done}/{docs.length} 完了</span>
           </div>
           <div className="mt-1.5"><ProgressBar done={done} total={docs.length} /></div>
+        </div>
+        <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
+      </button>
+
+      {/* 工事写真は別画面へ遷移 */}
+      <button onClick={onOpenPhotos}
+        className="mt-2 w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">
+          <Camera className="w-5 h-5 text-brand-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-slate-800 dark:text-slate-100">工事写真</span>
+          <p className="text-xs text-slate-400 mt-0.5">撮影対象ツリー・必須写真の撮り漏れチェック</p>
         </div>
         <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
       </button>
@@ -2505,6 +2538,623 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 
       <div className="flex justify-end mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">閉じる</button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════
+// ── 工事写真管理 ─────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+
+// ── 工事写真 メインビュー ──
+function PhotoBody({ detail, notify }) {
+  const [nodes, setNodes] = useState([])
+  const [generated, setGenerated] = useState(false)
+  const [presentTrades, setPresentTrades] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [photos, setPhotos] = useState([]) // project 全写真
+  const [photosLoading, setPhotosLoading] = useState(false)
+  const [expandedNodes, setExpandedNodes] = useState(new Set())
+  const [collapsedTrades, setCollapsedTrades] = useState(new Set())
+  const [addNodeOpen, setAddNodeOpen] = useState(false)
+  const [lightbox, setLightbox] = useState(null) // Photo object
+  const [editNoteNode, setEditNoteNode] = useState(null)
+  const [uploadingNodes, setUploadingNodes] = useState(new Set()) // node IDs
+
+  const loadNodes = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/construction/projects/${detail.id}/photo-nodes`,
+        authConfig()
+      )
+      setNodes(data.nodes || [])
+      setGenerated(data.generated ?? false)
+      setPresentTrades(data.present_trades || [])
+    } catch (e) {
+      notify(e.response?.data?.error || '撮影ノードの取得に失敗しました', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [detail.id, notify])
+
+  const loadPhotos = useCallback(async () => {
+    setPhotosLoading(true)
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/construction/projects/${detail.id}/photos`,
+        authConfig()
+      )
+      setPhotos(data || [])
+    } catch { /* noop */ } finally {
+      setPhotosLoading(false)
+    }
+  }, [detail.id])
+
+  useEffect(() => { loadNodes() }, [loadNodes])
+  useEffect(() => { loadPhotos() }, [loadPhotos])
+
+  const doGenerate = async () => {
+    setGenerating(true)
+    try {
+      await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/photo-nodes/generate`,
+        {}, authConfig()
+      )
+      await loadNodes()
+      notify('撮影ツリーを生成しました')
+    } catch (e) {
+      notify(e.response?.data?.error || 'ツリー生成に失敗しました', 'error')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const regenTree = async () => {
+    const ok = window.confirm(
+      '撮影ツリーを再生成します。\n' +
+      '既存のノードは温存され、不足分のみ追加されます（冪等）。\nよろしいですか？'
+    )
+    if (!ok) return
+    await doGenerate()
+  }
+
+  const patchNode = async (nodeId, body) => {
+    try {
+      const { data } = await axios.patch(
+        `${apiUrl}/api/construction/photo-nodes/${nodeId}`, body, authConfig()
+      )
+      setNodes((prev) => prev.map((n) => n.id === nodeId ? data : n))
+    } catch (e) {
+      notify(e.response?.data?.error || '更新に失敗しました', 'error')
+    }
+  }
+
+  const deleteNode = async (nodeId) => {
+    const ok = window.confirm('この撮影ノードを削除します。よろしいですか？')
+    if (!ok) return
+    try {
+      await axios.delete(`${apiUrl}/api/construction/photo-nodes/${nodeId}`, authConfig())
+      setNodes((prev) => prev.filter((n) => n.id !== nodeId))
+      notify('撮影ノードを削除しました')
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }
+
+  const uploadPhotos = async (nodeId, files) => {
+    setUploadingNodes((s) => { const n = new Set(s); n.add(nodeId); return n })
+    try {
+      const token = localStorage.getItem('authToken')
+      for (const file of files) {
+        const fd = new FormData()
+        fd.append('photo', file)
+        fd.append('node_id', nodeId)
+        await axios.post(
+          `${apiUrl}/api/construction/projects/${detail.id}/photos`,
+          fd,
+          { headers: { Authorization: `Bearer ${token}` } }
+        )
+      }
+      await Promise.all([loadPhotos(), loadNodes()])
+      notify(`${files.length} 枚をアップロードしました`)
+    } catch (e) {
+      notify(e.response?.data?.error || 'アップロードに失敗しました', 'error')
+    } finally {
+      setUploadingNodes((s) => { const n = new Set(s); n.delete(nodeId); return n })
+    }
+  }
+
+  const deletePhoto = async (photoId) => {
+    try {
+      await axios.delete(`${apiUrl}/api/construction/photos/${photoId}`, authConfig())
+      setPhotos((prev) => prev.filter((p) => p.id !== photoId))
+      await loadNodes() // photo_count を更新
+      notify('写真を削除しました')
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }
+
+  const toggleNode = (nodeId) => setExpandedNodes((s) => {
+    const n = new Set(s); n.has(nodeId) ? n.delete(nodeId) : n.add(nodeId); return n
+  })
+  const toggleTrade = (trade) => setCollapsedTrades((s) => {
+    const n = new Set(s); n.has(trade) ? n.delete(trade) : n.add(trade); return n
+  })
+
+  // trade → category → nodes のグルーピング
+  const tradeMap = {}
+  for (const node of nodes) {
+    const t = node.trade || '未分類'
+    const c = node.category || '未分類'
+    if (!tradeMap[t]) tradeMap[t] = {}
+    if (!tradeMap[t][c]) tradeMap[t][c] = []
+    tradeMap[t][c].push(node)
+  }
+
+  // 撮影漏れ（required && is_active && photo_count===0）を工種別に集計
+  const missingByTrade = {}
+  for (const node of nodes) {
+    if (node.required && node.is_active && (node.photo_count ?? 0) === 0) {
+      const t = node.trade || '未分類'
+      missingByTrade[t] = (missingByTrade[t] || 0) + 1
+    }
+  }
+  const totalMissing = Object.values(missingByTrade).reduce((s, n) => s + n, 0)
+
+  // node_id → Photo[] のマップ
+  const photosByNode = {}
+  for (const p of photos) {
+    const key = String(p.node_id || '__none')
+    if (!photosByNode[key]) photosByNode[key] = []
+    photosByNode[key].push(p)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+      </div>
+    )
+  }
+
+  // 初回未生成
+  if (!generated && nodes.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 gap-6 text-center">
+        <Camera className="w-16 h-16 text-slate-300 dark:text-slate-600" />
+        <div>
+          <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100 mb-2">
+            撮影ツリーがまだ生成されていません
+          </h2>
+          {presentTrades.length > 0 && (
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-1">
+              数量書の工種: {presentTrades.join('、')}
+            </p>
+          )}
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            ボタンを押すと工種に応じた撮影対象一覧が自動作成されます。
+          </p>
+        </div>
+        <Button onClick={doGenerate} disabled={generating}>
+          {generating
+            ? <><Loader2 className="w-4 h-4 animate-spin mr-1" />生成中...</>
+            : <><Camera className="w-4 h-4 mr-1" />撮影ツリーを生成</>}
+        </Button>
+        {addNodeOpen && (
+          <AddPhotoNodeModal
+            projectId={detail.id}
+            onClose={() => setAddNodeOpen(false)}
+            onAdded={() => { setAddNodeOpen(false); loadNodes(); notify('撮影対象を追加しました') }}
+            onError={(m) => notify(m, 'error')}
+          />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* ヘッダ */}
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Camera className="w-5 h-5 text-brand-500" /> 工事写真
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end">
+          {totalMissing > 0 && (
+            <span className="text-xs font-bold text-danger-600 dark:text-danger-400 flex items-center gap-1">
+              <AlertTriangle className="w-3.5 h-3.5" />必須未撮影 {totalMissing}件
+            </span>
+          )}
+          <button
+            onClick={() => setAddNodeOpen(true)}
+            className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" /> 撮影対象を手動追加
+          </button>
+          <button
+            onClick={regenTree}
+            title="冪等な再生成：既存ノードは温存し不足分のみ追加"
+            className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:underline flex items-center gap-1">
+            <RefreshCw className="w-3.5 h-3.5" /> 再生成（既存温存）
+          </button>
+        </div>
+      </div>
+
+      {/* 工種グループ */}
+      {Object.keys(tradeMap).length === 0 ? (
+        <Card className="text-center py-10 text-slate-500 dark:text-slate-400 text-sm">
+          撮影対象がありません。「撮影対象を手動追加」から登録するか「再生成」を試してください。
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {Object.keys(tradeMap).map((trade) => {
+            const catMap = tradeMap[trade]
+            const missing = missingByTrade[trade] || 0
+            const isOpen = !collapsedTrades.has(trade)
+            return (
+              <div key={trade} className="bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+                {/* 工種ヘッダ */}
+                <button
+                  onClick={() => toggleTrade(trade)}
+                  className="w-full flex items-center gap-2 px-4 py-3 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
+                  <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left">{trade}</span>
+                  {missing > 0 && (
+                    <span className="text-xs font-bold text-danger-600 dark:text-danger-400 flex items-center gap-1 shrink-0">
+                      <AlertTriangle className="w-3 h-3" />未撮影 {missing}件
+                    </span>
+                  )}
+                </button>
+
+                {isOpen && (
+                  <div className="border-t border-slate-100 dark:border-ink-700">
+                    {Object.keys(catMap).map((cat) => {
+                      const catNodes = catMap[cat]
+                      return (
+                        <div key={cat}>
+                          {/* 種目（カテゴリ）サブヘッダ */}
+                          <div className="px-4 py-1.5 bg-slate-50 dark:bg-ink-700/40 text-xs font-semibold text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-ink-700/70">
+                            {cat}
+                          </div>
+                          {/* ノード行 */}
+                          <div className="divide-y divide-slate-100 dark:divide-ink-700/60">
+                            {catNodes.map((node) => (
+                              <PhotoNodeRow
+                                key={node.id}
+                                node={node}
+                                nodePhotos={photosByNode[String(node.id)] || []}
+                                expanded={expandedNodes.has(node.id)}
+                                uploading={uploadingNodes.has(node.id)}
+                                photosLoading={photosLoading}
+                                onToggle={() => toggleNode(node.id)}
+                                onUpload={(files) => uploadPhotos(node.id, files)}
+                                onDeletePhoto={deletePhoto}
+                                onOpenLightbox={(p) => setLightbox(p)}
+                                onPatchNode={(body) => patchNode(node.id, body)}
+                                onDeleteNode={() => deleteNode(node.id)}
+                                onEditNote={() => setEditNoteNode(node)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {addNodeOpen && (
+        <AddPhotoNodeModal
+          projectId={detail.id}
+          onClose={() => setAddNodeOpen(false)}
+          onAdded={() => { setAddNodeOpen(false); loadNodes(); notify('撮影対象を追加しました') }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+
+      {lightbox && (
+        <PhotoLightbox photo={lightbox} onClose={() => setLightbox(null)} />
+      )}
+
+      {editNoteNode && (
+        <EditPhotoNoteModal
+          node={editNoteNode}
+          onClose={() => setEditNoteNode(null)}
+          onSaved={(updated) => {
+            setEditNoteNode(null)
+            setNodes((prev) => prev.map((n) => n.id === updated.id ? updated : n))
+            notify('メモを保存しました')
+          }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── 撮影ノード 1行（折りたたみ式）──
+function PhotoNodeRow({
+  node, nodePhotos, expanded, uploading, photosLoading,
+  onToggle, onUpload, onDeletePhoto, onOpenLightbox,
+  onPatchNode, onDeleteNode, onEditNote,
+}) {
+  const isMissing = node.required && node.is_active && (node.photo_count ?? 0) === 0
+
+  return (
+    <div className={isMissing ? 'border-l-2 border-danger-400 dark:border-danger-500' : ''}>
+      {/* サマリ行（クリックで展開）*/}
+      <div
+        className={`flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-slate-50 dark:hover:bg-ink-700/30 transition ${!node.is_active ? 'opacity-50' : ''}`}
+        onClick={onToggle}>
+        <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-slate-800 dark:text-slate-200 truncate">
+              {node.target || node.photo_item || '—'}
+            </span>
+            {node.required && node.is_active && <Badge tone="warning">必須</Badge>}
+            {!node.is_active && <Badge tone="neutral">対象外</Badge>}
+            {node.source === 'manual' && <Badge tone="neutral">手動</Badge>}
+          </div>
+          {node.timing && (
+            <p className="text-xs text-slate-400 mt-0.5">{node.timing}</p>
+          )}
+        </div>
+        <div className="shrink-0 flex items-center gap-2">
+          {isMissing && <AlertTriangle className="w-4 h-4 text-danger-500" title="必須・未撮影" />}
+          <span className={`text-xs font-semibold tabular-nums ${(node.photo_count ?? 0) > 0 ? 'text-success-600 dark:text-success-400' : 'text-slate-400'}`}>
+            {node.photo_count ?? 0}枚
+          </span>
+        </div>
+      </div>
+
+      {/* 展開エリア */}
+      {expanded && (
+        <div className="px-5 pb-4 pt-2 bg-slate-50/50 dark:bg-ink-700/20 border-t border-slate-100 dark:border-ink-700/60">
+          {/* コントロール行 */}
+          <div className="flex items-center gap-4 flex-wrap mb-3">
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!node.is_active}
+                onChange={(e) => { e.stopPropagation(); onPatchNode({ is_active: e.target.checked }) }}
+              />
+              撮影対象に含める
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!node.required}
+                onChange={(e) => { e.stopPropagation(); onPatchNode({ required: e.target.checked }) }}
+              />
+              必須写真
+            </label>
+            <button
+              onClick={(e) => { e.stopPropagation(); onEditNote() }}
+              className="text-xs text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+              <Pencil className="w-3 h-3" />
+              {node.note ? 'メモを編集' : 'メモを追加'}
+            </button>
+            {node.note && (
+              <span className="text-xs text-slate-500 dark:text-slate-400 max-w-xs truncate italic" title={node.note}>
+                {node.note}
+              </span>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeleteNode() }}
+              className="text-xs text-danger-500 hover:underline flex items-center gap-1 ml-auto">
+              <Trash2 className="w-3 h-3" /> 削除
+            </button>
+          </div>
+
+          {/* 写真アップロード */}
+          <div className="mb-3">
+            <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer">
+              {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+              写真を追加（複数可）
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.length) onUpload(Array.from(e.target.files))
+                  e.target.value = ''
+                }}
+                disabled={uploading}
+              />
+            </label>
+          </div>
+
+          {/* サムネイル一覧 */}
+          {photosLoading ? (
+            <div className="flex items-center gap-1 text-xs text-slate-400">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />読み込み中...
+            </div>
+          ) : nodePhotos.length === 0 ? (
+            <p className="text-xs text-slate-400">写真はまだありません。</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {nodePhotos.map((photo) => (
+                <div key={photo.id} className="relative group w-20 h-20 shrink-0">
+                  <img
+                    src={photo.url}
+                    alt={photo.file_name}
+                    loading="lazy"
+                    className="w-20 h-20 object-cover rounded-xl cursor-pointer border border-slate-200 dark:border-ink-700 hover:opacity-90 transition"
+                    onClick={() => onOpenLightbox(photo)}
+                  />
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeletePhoto(photo.id) }}
+                    className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition hover:bg-danger-600"
+                    title="写真を削除">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 写真ライトボックス（画像拡大・×ボタンのみで閉じる）──
+function PhotoLightbox({ photo, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
+      <div className="relative flex flex-col items-center max-w-4xl w-full">
+        <button
+          onClick={onClose}
+          className="absolute -top-10 right-0 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/40 transition">
+          <X className="w-5 h-5" />
+        </button>
+        <img
+          src={photo.url}
+          alt={photo.file_name}
+          className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
+        />
+        {(photo.caption || photo.location || photo.taken_at) && (
+          <div className="mt-3 text-center text-sm text-white/80 space-y-0.5">
+            {photo.caption && <p>{photo.caption}</p>}
+            {photo.location && <p className="text-white/60">{photo.location}</p>}
+            {photo.taken_at && <p className="text-white/50 text-xs">{fmtDate(photo.taken_at)}</p>}
+          </div>
+        )}
+        {photo.file_name && (
+          <p className="mt-1 text-xs text-white/40">{photo.file_name}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── メモ編集モーダル ──
+function EditPhotoNoteModal({ node, onClose, onSaved, onError }) {
+  const [note, setNote] = useState(node.note || '')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    setSaving(true)
+    try {
+      const { data } = await axios.patch(
+        `${apiUrl}/api/construction/photo-nodes/${node.id}`,
+        { note }, authConfig()
+      )
+      onSaved(data)
+    } catch (e) {
+      onError(e.response?.data?.error || '保存に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title="メモを編集" onClose={onClose}>
+      <Field label="メモ">
+        <textarea
+          className={inputCls}
+          rows={4}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="撮影に関するメモ・注意事項など"
+        />
+      </Field>
+      <div className="flex justify-end gap-2 mt-4">
+        <button onClick={onClose}
+          className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">
+          キャンセル
+        </button>
+        <Button onClick={submit} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />保存</>}
+        </Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── 撮影対象 手動追加モーダル ──
+function AddPhotoNodeModal({ projectId, onClose, onAdded, onError }) {
+  const [f, setF] = useState({
+    category: '',
+    target: '',
+    photo_item: '',
+    trade: '',
+    timing: '',
+    required: true,
+    note: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+  const setB = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.checked }))
+
+  const submit = async () => {
+    if (!f.category.trim()) { onError('種目（工種種目）は必須です'); return }
+    if (!f.target.trim()) { onError('撮影対象は必須です'); return }
+    setSaving(true)
+    try {
+      await axios.post(
+        `${apiUrl}/api/construction/projects/${projectId}/photo-nodes`,
+        {
+          category: f.category,
+          target: f.target,
+          photo_item: f.photo_item || undefined,
+          trade: f.trade || undefined,
+          timing: f.timing || undefined,
+          required: f.required,
+          note: f.note || undefined,
+        },
+        authConfig()
+      )
+      onAdded()
+    } catch (e) {
+      onError(e.response?.data?.error || '追加に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title="撮影対象を手動追加" onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="工種種目（大分類） *">
+          <input className={inputCls} value={f.category} onChange={set('category')} placeholder="例: 鉄筋工事" />
+        </Field>
+        <Field label="撮影対象 *">
+          <input className={inputCls} value={f.target} onChange={set('target')} placeholder="例: 鉄筋組立状況" />
+        </Field>
+        <Field label="写真種別（中分類）">
+          <input className={inputCls} value={f.photo_item} onChange={set('photo_item')} placeholder="例: 施工状況" />
+        </Field>
+        <Field label="工種">
+          <input className={inputCls} value={f.trade} onChange={set('trade')} placeholder="例: 建築" />
+        </Field>
+        <Field label="撮影時期">
+          <input className={inputCls} value={f.timing} onChange={set('timing')} placeholder="例: 施工中" />
+        </Field>
+        <Field label="メモ">
+          <textarea className={inputCls} rows={2} value={f.note} onChange={set('note')} placeholder="撮影上の注意など" />
+        </Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer select-none">
+          <input type="checkbox" checked={f.required} onChange={setB('required')} />
+          必須写真とする
+        </label>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose}
+          className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">
+          キャンセル
+        </button>
+        <Button onClick={submit} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />追加</>}
+        </Button>
       </div>
     </ModalShell>
   )

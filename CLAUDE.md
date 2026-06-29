@@ -14,7 +14,7 @@
 04.portal-api/        ← バックエンド本体（Express + Supabase）※別フォルダ
 ```
 > 注: 以前 app/backend/ に古いスタブがありましたが、本番APIは 04.portal-api に一本化済み。
-> 旧スタブは 04.アプリ/_archive/03-portal-old-backend/ に退避。
+> 旧スタブは _archive に退避ののち 2026-06-28 に削除（参照ゼロを確認）。
 
 ## セットアップ
 ```bash

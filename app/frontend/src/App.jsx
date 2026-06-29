@@ -38,6 +38,7 @@ import WorkScopePage from './components/WorkScopePage'
 import WorkScopeGate from './components/WorkScopeGate'
 import RegulationsPage from './components/RegulationsPage'
 import BusinessCardsPage from './components/BusinessCardsPage'
+import ExamPage from './components/ExamPage'
 import ManualPage from './components/ManualPage'
 import QuoteComparePage from './components/QuoteComparePage'
 import { applyTheme, loadTheme } from './lib/theme'
@@ -1134,6 +1135,8 @@ function AppContent() {
     page = <RegulationsPage onBack={() => setView('dashboard')} />
   } else if (view === 'cards') {
     page = <BusinessCardsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'exam') {
+    page = <ExamPage onBack={() => setView('dashboard')} />
   } else if (view === 'manual') {
     page = <ManualPage onBack={() => setView('dashboard')} />
   } else {
