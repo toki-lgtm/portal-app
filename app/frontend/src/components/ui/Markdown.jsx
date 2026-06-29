@@ -38,6 +38,19 @@ const components = {
     <blockquote className="border-l-4 border-brand-300 dark:border-brand-500/40 bg-brand-50/60 dark:bg-brand-500/10 rounded-r-lg px-3 py-2 my-3 text-sm text-slate-700 dark:text-slate-200" {...p} />
   ),
   hr: () => <hr className="my-4 border-slate-200 dark:border-ink-700" />,
+  // 図版: 本文中の正しい位置に表示。alt を図の短いキャプションとして下に添える。
+  // <p> の中に来ても妥当なように <span>(display:block) で組む（<figure>だと入れ子崩れ）。
+  img: ({ node, src, alt, ...p }) => {
+    const cap = (alt || '').replace(/^図[:：]?\s*/, '').trim() // alt 先頭の「図:」を除く
+    return (
+      <span className="block my-4">
+        <img src={src} alt={alt || '図'} loading="lazy"
+          className="w-full max-h-[30rem] object-contain rounded-lg border border-slate-200 dark:border-ink-700 bg-white"
+          {...p} />
+        {cap && <span className="block text-xs text-slate-500 dark:text-slate-400 mt-1.5 text-center">{cap}</span>}
+      </span>
+    )
+  },
   a: ({ node, ...p }) => (
     <a className="text-brand-600 dark:text-brand-300 underline underline-offset-2" target="_blank" rel="noreferrer" {...p} />
   ),

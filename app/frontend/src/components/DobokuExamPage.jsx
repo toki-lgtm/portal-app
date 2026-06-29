@@ -121,16 +121,10 @@ function ReadTab({ showToast }) {
                   </button>
                   {openSec === s.id && (
                     <div className="px-4 pb-4">
-                      <Markdown className="bg-slate-50 dark:bg-ink-900/40 rounded-lg px-4 py-3" >
+                      {/* 図版は本文(body_md)中の正しい位置にインライン表示される（Markdownのimg） */}
+                      <Markdown className="bg-slate-50 dark:bg-ink-900/40 rounded-lg px-4 py-3">
                         {s.body_md}
                       </Markdown>
-                      {s.figures?.map((f) => (
-                        <figure key={f.id} className="mt-3">
-                          <img src={f.image_url} alt={f.caption || '図'} loading="lazy"
-                            className="w-full max-h-96 object-contain rounded-lg border border-slate-200 dark:border-ink-700 bg-white" />
-                          {f.caption && <figcaption className="text-xs text-slate-400 mt-1">{f.caption}</figcaption>}
-                        </figure>
-                      ))}
                     </div>
                   )}
                 </div>
