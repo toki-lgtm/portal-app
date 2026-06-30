@@ -47,6 +47,7 @@ const CONS_FOLDERS = [
   { no: 6, name: '工事打合簿' }, { no: 7, name: '施工図・詳細図・完成図' }, { no: 8, name: '材料承認・数量' },
   { no: 9, name: '施工体制' }, { no: 10, name: '工事写真・工事記録・検査関係' }, { no: 11, name: '協力会社見積・作業指示書' },
   { no: 12, name: '打合議事録' }, { no: 13, name: 'KY・新規・安全書類' }, { no: 14, name: '産廃関係' },
+  { no: 15, name: '入門・立入申請' },
 ]
 const folderLabel = (no) => `${String(no).padStart(2, '0')}.${(CONS_FOLDERS.find((f) => f.no === Number(no)) || {}).name || '施主提出書類'}`
 
