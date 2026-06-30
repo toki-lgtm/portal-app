@@ -3006,8 +3006,25 @@ function PhotoNodeRow({
             </button>
           </div>
 
-          {/* 写真アップロード */}
-          <div className="mb-3">
+          {/* 写真アップロード：スマホはカメラ直起動、PC等はファイル選択 */}
+          <div className="mb-3 flex items-center gap-3 flex-wrap">
+            {/* 撮影（capture=environment でスマホの背面カメラを直接起動。PCではファイル選択に自動フォールバック） */}
+            <label className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full bg-brand-500 text-white hover:bg-brand-600 cursor-pointer transition shadow-sm">
+              {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
+              撮影
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.length) onUpload(Array.from(e.target.files))
+                  e.target.value = ''
+                }}
+                disabled={uploading}
+              />
+            </label>
+            {/* ファイル/ギャラリーから追加（複数可） */}
             <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer">
               {uploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
               写真を追加（複数可）
