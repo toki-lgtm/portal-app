@@ -3217,17 +3217,19 @@ function PhotoNodeRow({
 // ── 写真ライトボックス（画像拡大・×ボタンのみで閉じる）──
 function PhotoLightbox({ photo, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
-      <div className="relative flex flex-col items-center max-w-4xl w-full">
-        <button
-          onClick={onClose}
-          className="absolute -top-10 right-0 w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/40 transition">
-          <X className="w-5 h-5" />
-        </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2">
+      {/* 閉じるボタンは画面右上に固定（画像サイズに依存させない） */}
+      <button
+        onClick={onClose}
+        className="absolute top-3 right-3 z-10 w-10 h-10 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/40 transition">
+        <X className="w-5 h-5" />
+      </button>
+      <div className="flex flex-col items-center">
+        {/* 画像はビューポート基準でフィット。最初から全体が見える状態で開く */}
         <img
           src={photo.url}
           alt={photo.file_name}
-          className="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
+          className="max-w-[96vw] max-h-[82dvh] w-auto h-auto object-contain rounded-xl shadow-2xl"
         />
         {(photo.caption || photo.location || photo.taken_at) && (
           <div className="mt-3 text-center text-sm text-white/80 space-y-0.5">
