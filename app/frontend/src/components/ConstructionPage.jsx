@@ -2547,20 +2547,10 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 // ── 工事写真管理 ─────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════
 
-// 角丸矩形パス（小黒板の背景用）
-function kbRoundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
-}
-
-// 画像の左下に「電子小黒板」を焼き込んで新しい File を返す。
-// 失敗時（古い端末等）は元ファイルをそのまま返す（撮影を止めない）。
-async function burnBlackboard(file, lines) {
+// 画像の左下に「電子小黒板」を表組みで焼き込んで新しい File を返す。
+// rows = [[ラベル, 値], ...]。参照様式（ラベル列｜値列の罫線表）に倣う。
+// 背景は半透明（透過）。失敗時（古い端末等）は元ファイルをそのまま返す。
+async function burnBlackboard(file, rows) {
   try {
     // EXIF の向きを反映してデコード（スマホ写真の回転ズレ対策）
     const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -2571,33 +2561,51 @@ async function burnBlackboard(file, lines) {
     ctx.drawImage(bitmap, 0, 0, W, H)
     if (bitmap.close) bitmap.close()
 
-    const rows = lines.filter(Boolean)
-    const fontSize = Math.max(Math.round(W / 52), 14)
-    const lineH = Math.round(fontSize * 1.5)
-    const padX = Math.round(fontSize * 0.9)
-    const padY = Math.round(fontSize * 0.7)
+    const data = (rows || []).filter((r) => r && r[0])
+    const fontSize = Math.max(Math.round(W / 55), 14)
+    const rowH = Math.round(fontSize * 1.8)
+    const padX = Math.round(fontSize * 0.6)
     ctx.font = `bold ${fontSize}px sans-serif`
-    let maxW = 0
-    for (const r of rows) maxW = Math.max(maxW, ctx.measureText(r).width)
-    const boxW = Math.min(maxW + padX * 2, W * 0.92)
-    const boxH = rows.length * lineH + padY * 2
+
+    // ラベル列幅 = 最長ラベル + 余白
+    let labelW = 0
+    for (const [label] of data) labelW = Math.max(labelW, ctx.measureText(label).width)
+    labelW = Math.round(labelW + padX * 2)
+    // 値列幅 = 最長値 + 余白（全体が画像幅の 92% を超えないよう上限）
+    let valueW = 0
+    for (const [, v] of data) valueW = Math.max(valueW, ctx.measureText(String(v || '')).width)
+    valueW = Math.round(valueW + padX * 2)
+    const maxTotal = Math.round(W * 0.92)
+    if (labelW + valueW > maxTotal) valueW = maxTotal - labelW
+
+    const boxW = labelW + valueW
+    const boxH = data.length * rowH
     const margin = Math.round(W / 60)
     const x = margin
     const y = H - boxH - margin
-    const radius = Math.round(fontSize * 0.4)
 
-    // 黒板風の背景（濃い半透明）＋白枠
-    ctx.fillStyle = 'rgba(17, 33, 28, 0.82)'
-    kbRoundRect(ctx, x, y, boxW, boxH, radius); ctx.fill()
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)'
-    ctx.lineWidth = Math.max(1, Math.round(fontSize / 12))
-    kbRoundRect(ctx, x, y, boxW, boxH, radius); ctx.stroke()
+    // 半透明の下地（透過）
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
+    ctx.fillRect(x, y, boxW, boxH)
 
-    // 文字（白・上揃え。長い行は枠内に収まるよう自動圧縮）
+    // 罫線（白）：外枠＋行間の横線＋ラベル/値の縦線
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
+    ctx.lineWidth = Math.max(1, Math.round(fontSize / 14))
+    ctx.strokeRect(x, y, boxW, boxH)
+    ctx.beginPath()
+    for (let i = 1; i < data.length; i++) {
+      ctx.moveTo(x, y + i * rowH); ctx.lineTo(x + boxW, y + i * rowH)
+    }
+    ctx.moveTo(x + labelW, y); ctx.lineTo(x + labelW, y + boxH)
+    ctx.stroke()
+
+    // 文字（白・各セル左寄せ・縦中央。長い値は列内に収まるよう自動圧縮）
     ctx.fillStyle = '#ffffff'
-    ctx.textBaseline = 'top'
-    rows.forEach((r, i) => {
-      ctx.fillText(r, x + padX, y + padY + i * lineH, boxW - padX * 2)
+    ctx.textBaseline = 'middle'
+    data.forEach(([label, value], i) => {
+      const cy = y + i * rowH + Math.round(rowH / 2)
+      ctx.fillText(label, x + padX, cy, labelW - padX * 2)
+      ctx.fillText(String(value || ''), x + labelW + padX, cy, valueW - padX * 2)
     })
 
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
@@ -2756,14 +2764,14 @@ function PhotoBody({ detail, notify }) {
           const itemText = node.photo_item && node.photo_item !== node.target
             ? `${node.photo_item}／${node.target || ''}`
             : (node.target || node.photo_item || '')
-          const lines = [
-            `工事名：${detail.project_name || ''}`,
-            `工事種別：${node.edition || ''}`,
-            `工種：${node.trade || ''}`,
-            `項目：${itemText}`,
-            `タイミング：${node.timing || ''}`,
+          const rows = [
+            ['工事名', detail.project_name || ''],
+            ['工事種別', node.edition || ''],
+            ['工種', node.trade || ''],
+            ['項目', itemText],
+            ['タイミング', node.timing || ''],
           ]
-          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, lines)))
+          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, rows)))
         }
       }
       for (const file of toSend) {
