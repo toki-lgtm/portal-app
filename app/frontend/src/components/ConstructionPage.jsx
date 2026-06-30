@@ -2787,12 +2787,15 @@ function PhotoBody({ detail, notify }) {
       if (opts.blackboard) {
         const node = nodes.find((n) => n.id === nodeId)
         if (node) {
-          // 上部の表＝工事名・工種、下部の大きな自由記述＝工事種別（参照様式）
+          // 上部の表＝工事名・工種、下部の大きな自由記述＝それ以外すべて（工事種別・項目・タイミング）
+          const itemText = node.photo_item && node.photo_item !== node.target
+            ? `${node.photo_item}／${node.target || ''}`
+            : (node.target || node.photo_item || '')
           const gridRows = [
             ['工事名', detail.project_name || ''],
             ['工種', node.trade || ''],
           ]
-          const freeLines = [node.edition || ''].filter(Boolean)
+          const freeLines = [node.edition || '', itemText, node.timing || ''].filter(Boolean)
           toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, { gridRows, freeLines })))
         }
       }
