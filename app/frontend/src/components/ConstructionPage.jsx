@@ -27,18 +27,6 @@ const PROJ_STATUS = [
 ]
 const PROJ_STATUS_MAP = Object.fromEntries(PROJ_STATUS.map((s) => [s.key, s]))
 
-// 提出書類ステータス（順序＝標準フロー）
-const DOC_STATUS = [
-  { key: 'not_started', label: '未着手', tone: 'neutral' },
-  { key: 'drafting', label: '作成中', tone: 'info' },
-  { key: 'internal_review', label: '社内確認', tone: 'warning' },
-  { key: 'submitted', label: '提出済', tone: 'info' },
-  { key: 'approved', label: '承認', tone: 'success' },
-  { key: 'rejected', label: '差戻し', tone: 'danger' },
-  { key: 'na', label: '対象外', tone: 'neutral' },
-]
-const DOC_STATUS_MAP = Object.fromEntries(DOC_STATUS.map((s) => [s.key, s]))
-
 // 大分類（業務フェーズ）
 const CATEGORIES = [
   { no: 1, name: '契約・設計図書' },
@@ -52,12 +40,13 @@ const CATEGORIES = [
   { no: 9, name: '完成・引渡・電子納品' },
 ]
 
-// 書類整理（保管庫）の分類 = 実フォルダ体系 00〜12（九州防衛局 建築工事の現場フォルダ準拠）
+// 書類整理（保管庫）の分類 = 実フォルダ体系 00〜14（九州防衛局 建築工事の現場フォルダ準拠・実ドライブを確認して整備）
 const CONS_FOLDERS = [
   { no: 0, name: '入札時資料' }, { no: 1, name: '設計図書' }, { no: 2, name: '契約関係' },
   { no: 3, name: '工程表' }, { no: 4, name: '施主提出書類' }, { no: 5, name: '施工計画書' },
   { no: 6, name: '工事打合簿' }, { no: 7, name: '施工図・詳細図・完成図' }, { no: 8, name: '材料承認・数量' },
-  { no: 9, name: '施工体制' }, { no: 10, name: '工事写真' }, { no: 11, name: '協力会社見積' }, { no: 12, name: '打合議事録' },
+  { no: 9, name: '施工体制' }, { no: 10, name: '工事写真・工事記録・検査関係' }, { no: 11, name: '協力会社見積・作業指示書' },
+  { no: 12, name: '打合議事録' }, { no: 13, name: 'KY・新規・安全書類' }, { no: 14, name: '産廃関係' },
 ]
 const folderLabel = (no) => `${String(no).padStart(2, '0')}.${(CONS_FOLDERS.find((f) => f.no === Number(no)) || {}).name || '施主提出書類'}`
 
@@ -628,7 +617,7 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
         </div>
         <div className="flex-1 min-w-0">
           <span className="text-sm font-bold text-slate-800 dark:text-slate-100">書類整理（保管庫）</span>
-          <p className="text-xs text-slate-400 mt-0.5">工事のあらゆる書類を 00〜12 のフォルダで整理（添付 {storedFiles} 件）</p>
+          <p className="text-xs text-slate-400 mt-0.5">工事のあらゆる書類を 00〜14 のフォルダで整理（添付 {storedFiles} 件）</p>
         </div>
         <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
       </button>
@@ -835,23 +824,16 @@ function InspectionRow({ item, docOptions, docName, onPatch }) {
   )
 }
 
-// ── 書類整理（保管庫・別画面）00〜12 フォルダ別アコーディオン ──
+// ── 書類整理（保管庫・別画面）00〜14 フォルダ別アコーディオン ──
 function StorageBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
-  const docs = detail.documents || []
+  // 保管庫は「実ファイルのある書類」だけを表示する。
+  // （旧・提出書類リストの名残で中身が空のまま名前だけ残った書類は出さない）
+  const docs = (detail.documents || []).filter((d) => (d.files?.length || 0) > 0)
   const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
   const [aiUploading, setAiUploading] = useState(false)
   // 既定: 書類のあるフォルダは展開、空フォルダは折りたたみ
   const [collapsed, setCollapsed] = useState(() => new Set(CONS_FOLDERS.filter((f) => !docs.some((d) => d.folder_no === f.no)).map((f) => f.no)))
   const toggle = (no) => setCollapsed((p) => { const n = new Set(p); n.has(no) ? n.delete(no) : n.add(no); return n })
-
-  const changeStatus = async (doc, status) => {
-    try {
-      await axios.patch(`${apiUrl}/api/construction/documents/${doc.id}`, { status }, authConfig())
-      onReload()
-    } catch (e) {
-      notify(e.response?.data?.error || 'ステータス更新に失敗しました', 'error')
-    }
-  }
 
   // 書類をアップロード→Geminiが内容を読み取り、該当フォルダへ自動で振り分けて格納
   const onAiUpload = async (e) => {
@@ -889,7 +871,7 @@ function StorageBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、00〜12 のフォルダへ自動で振り分けます">
+          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、00〜14 のフォルダへ自動で振り分けます">
             {aiUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             AIで振り分けアップロード
             <input type="file" className="hidden" onChange={onAiUpload} disabled={aiUploading} />
@@ -924,7 +906,7 @@ function StorageBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
                 ) : (
                   <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
                     {rows.map((d) => (
-                      <DocRow key={d.id} doc={d} onChangeStatus={changeStatus} onEdit={() => onEditDoc(d)} />
+                      <DocRow key={d.id} doc={d} onEdit={() => onEditDoc(d)} />
                     ))}
                   </div>
                 )
@@ -1473,43 +1455,52 @@ function NaConfirmModal({ projectId, candidates, onClose, onApplied, onError }) 
   )
 }
 
-function DocRow({ doc, onChangeStatus, onEdit }) {
-  const ds = dueState(doc.due_date)
-  const dueCls = ds === 'overdue' ? 'text-danger-600 dark:text-danger-400 font-semibold'
-    : ds === 'soon' ? 'text-warning-600 dark:text-warning-400 font-semibold'
-      : 'text-slate-500 dark:text-slate-400'
+function DocRow({ doc, onEdit }) {
+  const files = doc.files || []
+  const [expand, setExpand] = useState(false)
+  const hasAi = files.some((f) => f.source && f.source !== 'manual')
+  // 書類を開く: 1ファイルなら直接そのファイルを開く。複数なら一覧を開いて選ばせる。
+  const openDoc = () => {
+    if (files.length === 1) window.open(files[0].url, '_blank', 'noopener')
+    else if (files.length > 1) setExpand((v) => !v)
+  }
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-slate-800 dark:text-slate-200 truncate">{doc.doc_name}</span>
-          {doc.trade && doc.trade !== '共通' && <Badge tone="neutral">{doc.trade}</Badge>}
-          {doc.form_no && <span className="text-[11px] text-slate-400">様式#{doc.form_no}</span>}
-        </div>
-        <div className="flex items-center gap-3 mt-0.5">
-          <span className={`text-xs ${dueCls}`}>{doc.due_date ? `締切 ${fmtDate(doc.due_date)}` : '締切—'}</span>
-          {doc.assignee_name && <span className="text-xs text-slate-400">担当 {doc.assignee_name}</span>}
-          {doc.files?.length > 0 && (
-            <span className="text-xs text-success-600 dark:text-success-400 flex items-center gap-0.5">
-              <Paperclip className="w-3 h-3" />{doc.files.length}
-            </span>
-          )}
-          {doc.files?.some((f) => f.source && f.source !== 'manual') && (
-            <span className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-0.5" title="AIが自動で振り分けた書類を含みます。種別をご確認ください">
-              <Sparkles className="w-3 h-3" />AI振分
-            </span>
-          )}
-        </div>
+    <div className="px-4 py-2.5">
+      <div className="flex items-center gap-3">
+        <button onClick={openDoc} className="min-w-0 flex-1 text-left group"
+          title={files.length === 1 ? '書類を開く' : '書類のファイル一覧を表示'}>
+          <div className="flex items-center gap-2">
+            <Paperclip className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <span className="text-sm text-slate-800 dark:text-slate-200 truncate group-hover:text-brand-600 dark:group-hover:text-brand-400 group-hover:underline">{doc.doc_name}</span>
+            {doc.trade && doc.trade !== '共通' && <Badge tone="neutral">{doc.trade}</Badge>}
+            {files.length > 1 && <span className="text-[11px] text-slate-400 shrink-0">{files.length} ファイル</span>}
+            {hasAi && (
+              <span className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-0.5 shrink-0" title="AIが自動で振り分けた書類を含みます。種別をご確認ください">
+                <Sparkles className="w-3 h-3" />AI振分
+              </span>
+            )}
+            {files.length === 1 && <ExternalLink className="w-3 h-3 text-slate-300 shrink-0" />}
+          </div>
+        </button>
+        <button onClick={onEdit} title="書類名・フォルダ・添付ファイルを編集"
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700 shrink-0">
+          <Pencil className="w-4 h-4" />
+        </button>
       </div>
-      <select
-        value={doc.status}
-        onChange={(e) => onChangeStatus(doc, e.target.value)}
-        className="text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200">
-        {DOC_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-      </select>
-      <button onClick={onEdit} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700">
-        <Pencil className="w-4 h-4" />
-      </button>
+      {expand && files.length > 1 && (
+        <ul className="mt-2 ml-6 space-y-1">
+          {files.map((file) => (
+            <li key={file.id}>
+              <a href={file.url} target="_blank" rel="noreferrer"
+                className="text-xs text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+                <Paperclip className="w-3 h-3 shrink-0" />
+                <span className="truncate">{file.file_name}</span>
+                <ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -1623,11 +1614,11 @@ function NewProjectModal({ onClose, onCreated, onError }) {
   )
 }
 
-// ── 書類の編集（締切・担当ファイル参照・メモ）──
+// ── 書類の編集（書類名・フォルダ・添付ファイル・メモ）──
 function EditDocModal({ doc, onClose, onSaved, onError }) {
   const [f, setF] = useState({
-    status: doc.status, due_date: doc.due_date || '', file_ref: doc.file_ref || '',
-    submitted_at: doc.submitted_at || '', approved_at: doc.approved_at || '', note: doc.note || '',
+    doc_name: doc.doc_name || '', folder_no: doc.folder_no ?? 4,
+    due_date: doc.due_date || '', file_ref: doc.file_ref || '', note: doc.note || '',
   })
   const [saving, setSaving] = useState(false)
   const [files, setFiles] = useState(doc.files || [])
@@ -1635,9 +1626,11 @@ function EditDocModal({ doc, onClose, onSaved, onError }) {
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
 
   const submit = async () => {
+    if (!String(f.doc_name).trim()) { onError('書類名は必須です'); return }
     setSaving(true)
     try {
-      await axios.patch(`${apiUrl}/api/construction/documents/${doc.id}`, f, authConfig())
+      await axios.patch(`${apiUrl}/api/construction/documents/${doc.id}`,
+        { ...f, folder_no: Number(f.folder_no) }, authConfig())
       onSaved()
     } catch (e) {
       onError(e.response?.data?.error || '更新に失敗しました')
@@ -1676,10 +1669,9 @@ function EditDocModal({ doc, onClose, onSaved, onError }) {
   return (
     <ModalShell title={doc.doc_name} onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="ステータス"><select className={inputCls} value={f.status} onChange={set('status')}>{DOC_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></Field>
+        <div className="col-span-2"><Field label="書類名 *"><input className={inputCls} value={f.doc_name} onChange={set('doc_name')} /></Field></div>
+        <Field label="フォルダ"><select className={inputCls} value={f.folder_no} onChange={set('folder_no')}>{CONS_FOLDERS.map((c) => <option key={c.no} value={c.no}>{String(c.no).padStart(2, '0')}. {c.name}</option>)}</select></Field>
         <Field label="締切"><input className={inputCls} type="date" value={f.due_date} onChange={set('due_date')} /></Field>
-        <Field label="提出日"><input className={inputCls} type="date" value={f.submitted_at} onChange={set('submitted_at')} /></Field>
-        <Field label="承認日"><input className={inputCls} type="date" value={f.approved_at} onChange={set('approved_at')} /></Field>
         <div className="col-span-2"><Field label="ファイル参照（共有ドライブのURL/パス）"><input className={inputCls} value={f.file_ref} onChange={set('file_ref')} placeholder="https://drive.google.com/... または \\\\server\\..." /></Field></div>
         <div className="col-span-2"><Field label="メモ"><textarea className={inputCls} rows={2} value={f.note} onChange={set('note')} /></Field></div>
       </div>
@@ -1726,19 +1718,31 @@ function EditDocModal({ doc, onClose, onSaved, onError }) {
   )
 }
 
-// ── 書類の手動追加（書類整理フォルダへ）──
+// ── 書類の手動追加（フォルダを指定してファイルを格納。AIを使わない手動振り分け）──
+//   保管庫は「実ファイルのある書類」のみ表示するため、追加時にファイルを必ず添付する。
 function AddDocModal({ projectId, onClose, onAdded, onError }) {
   const [f, setF] = useState({ folder_no: 4, doc_name: '', trade: '共通' })
+  const [file, setFile] = useState(null)
   const [saving, setSaving] = useState(false)
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+  // 書類名が空ならファイル名（拡張子を除く）を採用
+  const effectiveName = (f.doc_name.trim() || (file ? file.name.replace(/\.[^.]+$/, '') : '')).trim()
 
   const submit = async () => {
-    if (!f.doc_name.trim()) { onError('書類名は必須です'); return }
+    if (!file) { onError('ファイルを選択してください'); return }
+    if (!effectiveName) { onError('書類名は必須です'); return }
     setSaving(true)
     try {
-      await axios.post(`${apiUrl}/api/construction/projects/${projectId}/documents`, {
-        folder_no: Number(f.folder_no), doc_name: f.doc_name, trade: f.trade,
+      // 1) フォルダに書類（入れ物）を作成
+      const { data: doc } = await axios.post(`${apiUrl}/api/construction/projects/${projectId}/documents`, {
+        folder_no: Number(f.folder_no), doc_name: effectiveName, trade: f.trade,
       }, authConfig())
+      // 2) ファイルを添付（共有ドライブ保存）
+      const fd = new FormData()
+      fd.append('file', file)
+      const token = localStorage.getItem('authToken')
+      await axios.post(`${apiUrl}/api/construction/documents/${doc.id}/files`, fd,
+        { headers: { Authorization: `Bearer ${token}` } })
       onAdded()
     } catch (e) {
       onError(e.response?.data?.error || '追加に失敗しました')
@@ -1750,7 +1754,16 @@ function AddDocModal({ projectId, onClose, onAdded, onError }) {
       <div className="grid grid-cols-2 gap-3">
         <Field label="フォルダ"><select className={inputCls} value={f.folder_no} onChange={set('folder_no')}>{CONS_FOLDERS.map((c) => <option key={c.no} value={c.no}>{String(c.no).padStart(2, '0')}. {c.name}</option>)}</select></Field>
         <Field label="工種"><input className={inputCls} value={f.trade} onChange={set('trade')} /></Field>
-        <div className="col-span-2"><Field label="書類名 *"><input className={inputCls} value={f.doc_name} onChange={set('doc_name')} /></Field></div>
+        <div className="col-span-2"><Field label="書類名（空欄ならファイル名を使用）"><input className={inputCls} value={f.doc_name} onChange={set('doc_name')} placeholder={file ? file.name.replace(/\.[^.]+$/, '') : '例: 着工届'} /></Field></div>
+        <div className="col-span-2">
+          <Field label="ファイル *">
+            <label className="flex items-center gap-2 text-sm px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-ink-600 cursor-pointer hover:border-brand-400 text-slate-600 dark:text-slate-300">
+              <Upload className="w-4 h-4 shrink-0" />
+              <span className="truncate">{file ? file.name : 'ファイルを選択'}</span>
+              <input type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            </label>
+          </Field>
+        </div>
       </div>
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
