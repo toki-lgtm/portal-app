@@ -2547,10 +2547,11 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 // ── 工事写真管理 ─────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════
 
-// 画像の左下に「電子小黒板」を表組みで焼き込んで新しい File を返す。
-// rows = [[ラベル, 値], ...]。参照様式（ラベル列｜値列の罫線表）に倣う。
+// 画像の左下に「電子小黒板」を焼き込んで新しい File を返す。参照様式に準拠：
+//   上部 = ラベル列｜値列の小さめの表（gridRows）
+//   下部 = 大きな自由記述欄（freeLines）
 // 背景は半透明（透過）。失敗時（古い端末等）は元ファイルをそのまま返す。
-async function burnBlackboard(file, rows) {
+async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
   try {
     // EXIF の向きを反映してデコード（スマホ写真の回転ズレ対策）
     const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -2561,51 +2562,76 @@ async function burnBlackboard(file, rows) {
     ctx.drawImage(bitmap, 0, 0, W, H)
     if (bitmap.close) bitmap.close()
 
-    const data = (rows || []).filter((r) => r && r[0])
-    const fontSize = Math.max(Math.round(W / 55), 14)
-    const rowH = Math.round(fontSize * 1.8)
-    const padX = Math.round(fontSize * 0.6)
-    ctx.font = `bold ${fontSize}px sans-serif`
+    const grid = gridRows.filter((r) => r && r[0])
+    const frees = freeLines.filter(Boolean)
 
-    // ラベル列幅 = 最長ラベル + 余白
+    // サイズ感は参照画像に合わせる（表＝小さめ／自由記述＝大きめ）
+    const gridFont = Math.max(Math.round(W / 50), 13)
+    const freeFont = Math.max(Math.round(W / 26), 24)
+    const padX = Math.round(gridFont * 0.6)
+    const gridRowH = Math.round(gridFont * 1.7)
+    const freeRowH = Math.round(freeFont * 1.4)
+    const freePadY = Math.round(freeFont * 0.4)
+
+    // 表の列幅
+    ctx.font = `bold ${gridFont}px sans-serif`
     let labelW = 0
-    for (const [label] of data) labelW = Math.max(labelW, ctx.measureText(label).width)
+    for (const [label] of grid) labelW = Math.max(labelW, ctx.measureText(label).width)
     labelW = Math.round(labelW + padX * 2)
-    // 値列幅 = 最長値 + 余白（全体が画像幅の 92% を超えないよう上限）
-    let valueW = 0
-    for (const [, v] of data) valueW = Math.max(valueW, ctx.measureText(String(v || '')).width)
-    valueW = Math.round(valueW + padX * 2)
-    const maxTotal = Math.round(W * 0.92)
-    if (labelW + valueW > maxTotal) valueW = maxTotal - labelW
+    let gridValW = 0
+    for (const [, v] of grid) gridValW = Math.max(gridValW, ctx.measureText(String(v || '')).width)
+    gridValW = Math.round(gridValW + padX * 2)
+    const gridTotalW = labelW + gridValW
 
-    const boxW = labelW + valueW
-    const boxH = data.length * rowH
+    // 自由記述の最大幅
+    ctx.font = `bold ${freeFont}px sans-serif`
+    let freeW = 0
+    for (const t of frees) freeW = Math.max(freeW, ctx.measureText(t).width)
+    freeW = Math.round(freeW + padX * 2)
+
+    const maxTotal = Math.round(W * 0.94)
+    const boxW = Math.min(Math.max(gridTotalW, freeW), maxTotal)
+    const valueW = boxW - labelW
+
+    const gridH = grid.length * gridRowH
+    const freeH = frees.length ? frees.length * freeRowH + freePadY * 2 : 0
+    const boxH = gridH + freeH
     const margin = Math.round(W / 60)
     const x = margin
     const y = H - boxH - margin
 
-    // 半透明の下地（透過）
+    // 下地（半透明・透過）
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
     ctx.fillRect(x, y, boxW, boxH)
 
-    // 罫線（白）：外枠＋行間の横線＋ラベル/値の縦線
+    // 罫線（白）
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
-    ctx.lineWidth = Math.max(1, Math.round(fontSize / 14))
+    ctx.lineWidth = Math.max(1, Math.round(gridFont / 12))
     ctx.strokeRect(x, y, boxW, boxH)
     ctx.beginPath()
-    for (let i = 1; i < data.length; i++) {
-      ctx.moveTo(x, y + i * rowH); ctx.lineTo(x + boxW, y + i * rowH)
+    // 表の行間＋（表と自由記述の境界）
+    for (let i = 1; i <= grid.length; i++) {
+      const yy = y + i * gridRowH
+      ctx.moveTo(x, yy); ctx.lineTo(x + boxW, yy)
     }
-    ctx.moveTo(x + labelW, y); ctx.lineTo(x + labelW, y + boxH)
+    // 表のラベル/値 縦線（表の範囲のみ）
+    if (grid.length) { ctx.moveTo(x + labelW, y); ctx.lineTo(x + labelW, y + gridH) }
     ctx.stroke()
 
-    // 文字（白・各セル左寄せ・縦中央。長い値は列内に収まるよう自動圧縮）
+    // 表の文字（小さめ・縦中央・左寄せ。長い値は列内に自動圧縮）
     ctx.fillStyle = '#ffffff'
     ctx.textBaseline = 'middle'
-    data.forEach(([label, value], i) => {
-      const cy = y + i * rowH + Math.round(rowH / 2)
+    ctx.font = `bold ${gridFont}px sans-serif`
+    grid.forEach(([label, value], i) => {
+      const cy = y + i * gridRowH + Math.round(gridRowH / 2)
       ctx.fillText(label, x + padX, cy, labelW - padX * 2)
       ctx.fillText(String(value || ''), x + labelW + padX, cy, valueW - padX * 2)
+    })
+    // 自由記述（大きめ）
+    ctx.font = `bold ${freeFont}px sans-serif`
+    frees.forEach((t, i) => {
+      const cy = y + gridH + freePadY + i * freeRowH + Math.round(freeRowH / 2)
+      ctx.fillText(t, x + padX, cy, boxW - padX * 2)
     })
 
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
@@ -2761,17 +2787,13 @@ function PhotoBody({ detail, notify }) {
       if (opts.blackboard) {
         const node = nodes.find((n) => n.id === nodeId)
         if (node) {
-          const itemText = node.photo_item && node.photo_item !== node.target
-            ? `${node.photo_item}／${node.target || ''}`
-            : (node.target || node.photo_item || '')
-          const rows = [
+          // 上部の表＝工事名・工種、下部の大きな自由記述＝工事種別（参照様式）
+          const gridRows = [
             ['工事名', detail.project_name || ''],
-            ['工事種別', node.edition || ''],
             ['工種', node.trade || ''],
-            ['項目', itemText],
-            ['タイミング', node.timing || ''],
           ]
-          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, rows)))
+          const freeLines = [node.edition || ''].filter(Boolean)
+          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, { gridRows, freeLines })))
         }
       }
       for (const file of toSend) {
