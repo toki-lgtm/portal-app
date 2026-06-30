@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
   Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
   BarChart3, FileSpreadsheet, ChevronDown, GitBranch, CheckCircle2, RefreshCw,
-  Camera,
+  Camera, Circle, Link2, MinusCircle,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -51,6 +51,15 @@ const CATEGORIES = [
   { no: 8, name: '検査' },
   { no: 9, name: '完成・引渡・電子納品' },
 ]
+
+// 書類整理（保管庫）の分類 = 実フォルダ体系 00〜12（九州防衛局 建築工事の現場フォルダ準拠）
+const CONS_FOLDERS = [
+  { no: 0, name: '入札時資料' }, { no: 1, name: '設計図書' }, { no: 2, name: '契約関係' },
+  { no: 3, name: '工程表' }, { no: 4, name: '施主提出書類' }, { no: 5, name: '施工計画書' },
+  { no: 6, name: '工事打合簿' }, { no: 7, name: '施工図・詳細図・完成図' }, { no: 8, name: '材料承認・数量' },
+  { no: 9, name: '施工体制' }, { no: 10, name: '工事写真' }, { no: 11, name: '協力会社見積' }, { no: 12, name: '打合議事録' },
+]
+const folderLabel = (no) => `${String(no).padStart(2, '0')}.${(CONS_FOLDERS.find((f) => f.no === Number(no)) || {}).name || '施主提出書類'}`
 
 const CONSTRUCTION_TYPES = ['建築', '土木', '電気', '機械', 'その他']
 const WORK_CATEGORIES = ['新設', '改修', 'その他']
@@ -189,7 +198,7 @@ function StatusGroup({ status, count, defaultOpen = true, children }) {
 }
 
 export default function ConstructionPage({ onBack }) {
-  const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist' | 'photos'
+  const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist' | 'storage' | 'photos'
   const [projects, setProjects] = useState([])
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -265,6 +274,7 @@ export default function ConstructionPage({ onBack }) {
     await loadDetail(id)
   }, [loadDetail])
   const goChecklist = useCallback(() => { setView('checklist'); pushSub('checklist') }, [])
+  const goStorage = useCallback(() => { setView('storage'); pushSub('storage') }, [])
   const goPhotos = useCallback(() => { setView('photos'); pushSub('photos') }, [])
   // 戻る（履歴を1つ戻す＝popstate 経由で view が下がる）
   const goBack = useCallback(() => window.history.back(), [])
@@ -283,7 +293,7 @@ export default function ConstructionPage({ onBack }) {
     if (!proj?.id) return
     const ok = window.confirm(
       `工事「${proj.project_name}」を削除します。\n` +
-      'この工事と提出書類チェックリストは一覧から見えなくなります。\n\nよろしいですか？'
+      'この工事と検査書類チェックリスト・書類整理は一覧から見えなくなります。\n\nよろしいですか？'
     )
     if (!ok) return
     try {
@@ -324,9 +334,9 @@ export default function ConstructionPage({ onBack }) {
         {stats && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             <KpiCard icon={<Building2 className="w-4 h-4" />} label="進行中の工事" value={stats.active_projects} tone="info" />
-            <KpiCard icon={<AlertTriangle className="w-4 h-4" />} label="期限超過" value={stats.overdue} tone="danger" />
-            <KpiCard icon={<Clock className="w-4 h-4" />} label="締切間近(14日)" value={stats.due_soon} tone="warning" />
-            <KpiCard icon={<RotateCcw className="w-4 h-4" />} label="差戻し" value={stats.rejected} tone="danger" />
+            <KpiCard icon={<AlertTriangle className="w-4 h-4" />} label="検査日超過" value={stats.overdue} tone="danger" />
+            <KpiCard icon={<Clock className="w-4 h-4" />} label="検査日間近(14日)" value={stats.due_soon} tone="warning" />
+            <KpiCard icon={<ListChecks className="w-4 h-4" />} label="未確認の検査項目" value={stats.pending_items} tone="warning" />
           </div>
         )}
 
@@ -405,12 +415,34 @@ export default function ConstructionPage({ onBack }) {
           <ChecklistBody
             detail={detail}
             onReload={reloadDetail}
+            onOpenStorage={goStorage}
+            notify={notify}
+          />
+        )}
+        <Toast toast={toast} />
+      </div>
+    )
+  }
+
+  // ── 書類整理（保管庫）ビュー（別画面）──
+  if (view === 'storage') {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <button onClick={goBack}
+          className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+          <ArrowLeft className="w-4 h-4" /> 工事詳細へ
+        </button>
+        {detailLoading || !detail ? (
+          <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+        ) : (
+          <StorageBody
+            detail={detail}
+            onReload={reloadDetail}
             onEditDoc={(d) => setEditDoc(d)}
             onAddDoc={() => setAddDocOpen(true)}
             notify={notify}
           />
         )}
-
         {editDoc && (
           <EditDocModal doc={editDoc} onClose={() => setEditDoc(null)}
             onSaved={() => { setEditDoc(null); reloadDetail(); notify('更新しました') }}
@@ -462,6 +494,7 @@ export default function ConstructionPage({ onBack }) {
           onDelete={() => deleteProject(detail)}
           notify={notify}
           onOpenChecklist={goChecklist}
+          onOpenStorage={goStorage}
           onOpenPhotos={goPhotos}
         />
       )}
@@ -496,9 +529,11 @@ function KpiCard({ icon, label, value, tone }) {
 }
 
 // ── 詳細本体（工事メタ＋フェーズ別書類チェックリスト）──
-function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist, onOpenPhotos }) {
+function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist, onOpenStorage, onOpenPhotos }) {
   const docs = detail.documents || []
-  const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
+  const items = detail.inspection_items || []
+  const inspDone = items.filter((it) => it.status === 'done' || it.status === 'na').length
+  const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
   const [reflectBusy, setReflectBusy] = useState(false)
   const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
   const [basicOpen, toggleBasic] = useSectionCollapse('basic_info', true)
@@ -585,18 +620,31 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
 
       <DesignChangeSection detail={detail} notify={notify} onReload={onReload} />
 
-      {/* 提出書類チェックリストは別画面へ遷移 */}
-      <button onClick={onOpenChecklist}
+      {/* 書類整理（保管庫）は別画面へ遷移 */}
+      <button onClick={onOpenStorage}
         className="w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">
+          <FolderOpen className="w-5 h-5 text-brand-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-slate-800 dark:text-slate-100">書類整理（保管庫）</span>
+          <p className="text-xs text-slate-400 mt-0.5">工事のあらゆる書類を 00〜12 のフォルダで整理（添付 {storedFiles} 件）</p>
+        </div>
+        <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
+      </button>
+
+      {/* 検査書類チェックリストは別画面へ遷移 */}
+      <button onClick={onOpenChecklist}
+        className="mt-2 w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
         <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">
           <ListChecks className="w-5 h-5 text-brand-500" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">提出書類チェックリスト</span>
-            <span className="text-xs text-slate-500 shrink-0">{done}/{docs.length} 完了</span>
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">検査書類チェックリスト</span>
+            <span className="text-xs text-slate-500 shrink-0">{inspDone}/{items.length} 確認</span>
           </div>
-          <div className="mt-1.5"><ProgressBar done={done} total={docs.length} /></div>
+          <div className="mt-1.5"><ProgressBar done={inspDone} total={items.length} /></div>
         </div>
         <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
       </button>
@@ -637,18 +685,162 @@ function Meta({ label, value }) {
   )
 }
 
-// ── 提出書類チェックリスト（別画面・カテゴリ別アコーディオン）──
-function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
+// ── 検査書類チェックリスト（別画面・区分別アコーディオン）──
+//   発注者「完成・完了検査チェックリスト」の項目を確認・達成管理。
+//   書類整理(保管庫)の書類を手動で紐づけ＋1日1回のAI棚卸しで自動✓。
+function ChecklistBody({ detail, onReload, onOpenStorage, notify }) {
+  const items = detail.inspection_items || []
   const docs = detail.documents || []
-  const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
-  const [aiUploading, setAiUploading] = useState(false)
-  // 書類が1件以上あるカテゴリのみ表示
-  const cats = CATEGORIES.filter((cat) => docs.some((d) => d.category_no === cat.no))
-  // collapsed に入っている category_no は折りたたみ。既定は全展開。
+  const done = items.filter((it) => it.status === 'done' || it.status === 'na').length
+  const [sweeping, setSweeping] = useState(false)
+  // 区分(section)を出現順で取得
+  const sections = []
+  for (const it of items) if (!sections.includes(it.section)) sections.push(it.section)
   const [collapsed, setCollapsed] = useState(() => new Set())
-  const toggleCat = (no) => setCollapsed((s) => { const n = new Set(s); n.has(no) ? n.delete(no) : n.add(no); return n })
-  const expandAll = () => setCollapsed(new Set())
-  const collapseAll = () => setCollapsed(new Set(cats.map((c) => c.no)))
+  const toggleSec = (s) => setCollapsed((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n })
+
+  // 書類整理の書類（紐づけ候補）
+  const docOptions = docs.map((d) => ({ id: d.id, label: `${folderLabel(d.folder_no)} ＞ ${d.doc_name}` }))
+  const docName = (id) => (docOptions.find((o) => o.id === id) || {}).label || '（不明な書類）'
+
+  const patchItem = async (item, patch) => {
+    try {
+      await axios.patch(`${apiUrl}/api/construction/inspection-items/${item.id}`, patch, authConfig())
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || '更新に失敗しました', 'error')
+    }
+  }
+
+  // AI棚卸し: 保管庫の書類から未確認項目に該当するものをAIが判定して自動✓
+  const onSweep = async () => {
+    setSweeping(true)
+    try {
+      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-sweep`, {}, authConfig())
+      notify(data.skipped === 'no_api_key'
+        ? 'AIが未設定のため棚卸しできません'
+        : `AI棚卸し完了：${data.matched || 0} 件を自動で確認済みにしました`)
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || 'AI棚卸しに失敗しました', 'error')
+    } finally { setSweeping(false) }
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <ListChecks className="w-5 h-5 text-brand-500" /> 検査書類チェックリスト
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}（{detail.work_category === '改修' ? '改修工事編' : '新設工事編'}）</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <button onClick={onSweep} disabled={sweeping}
+            title="保管庫に格納済みの書類から、未確認の項目に該当するものをAIが判定して自動で確認済みにします"
+            className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 disabled:opacity-50">
+            {sweeping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            AI棚卸し
+          </button>
+          <button onClick={onOpenStorage} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+            <FolderOpen className="w-3.5 h-3.5" /> 書類整理へ
+          </button>
+        </div>
+      </div>
+
+      <Card className="px-4 py-3 mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">検査書類の確認状況</span>
+          <span className="text-xs text-slate-500">{done}/{items.length} 確認</span>
+        </div>
+        <ProgressBar done={done} total={items.length} />
+      </Card>
+
+      {items.length === 0 ? (
+        <Card className="text-center py-8 text-slate-500 dark:text-slate-400 text-sm">チェック項目がありません。</Card>
+      ) : (
+        <div className="space-y-3">
+          {sections.map((sec) => {
+            const rows = items.filter((it) => it.section === sec)
+            const secDone = rows.filter((it) => it.status === 'done' || it.status === 'na').length
+            const isOpen = !collapsed.has(sec)
+            return (
+              <div key={sec} className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+                <button onClick={() => toggleSec(sec)}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
+                  <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left truncate">{sec}</h3>
+                  <span className="text-xs text-slate-400 shrink-0">{secDone}/{rows.length}</span>
+                </button>
+                {isOpen && (
+                  <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
+                    {rows.map((it) => (
+                      <InspectionRow key={it.id} item={it} docOptions={docOptions} docName={docName} onPatch={patchItem} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// 検査チェック項目の1行（確認状態の切替＋保管庫書類の手動紐づけ）
+function InspectionRow({ item, docOptions, docName, onPatch }) {
+  const st = item.status
+  const cycle = () => onPatch(item, { status: st === 'pending' ? 'done' : st === 'done' ? 'na' : 'pending' })
+  const onLink = (e) => {
+    const v = e.target.value
+    if (!v) onPatch(item, { linked_document_id: null, status: 'pending' })
+    else onPatch(item, { linked_document_id: Number(v), status: 'done' })
+  }
+  return (
+    <div className="flex items-center gap-3 px-4 py-2.5">
+      <button onClick={cycle} title="未 → 済 → 対象外 を切替" className="shrink-0">
+        {st === 'done' ? <CheckCircle2 className="w-5 h-5 text-success-500" />
+          : st === 'na' ? <MinusCircle className="w-5 h-5 text-slate-400" />
+            : <Circle className="w-5 h-5 text-slate-300" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm truncate ${st === 'na' ? 'text-slate-400 line-through' : 'text-slate-800 dark:text-slate-200'}`}>{item.item_name}</span>
+          {item.note && <span className="text-[11px] text-slate-400 truncate">{item.note}</span>}
+        </div>
+        <div className="flex items-center gap-3 mt-0.5">
+          {item.linked_document_id && (
+            <span className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-0.5 truncate">
+              <Link2 className="w-3 h-3 shrink-0" />{docName(item.linked_document_id)}
+            </span>
+          )}
+          {item.ai_confidence != null && (
+            <span className="text-[11px] text-slate-400 flex items-center gap-0.5" title={item.ai_note || ''}>
+              <Sparkles className="w-3 h-3" />AI{Math.round((item.ai_confidence || 0) * 100)}%
+            </span>
+          )}
+          {item.checked_by && <span className="text-[11px] text-slate-400">確認済</span>}
+        </div>
+      </div>
+      <select value={item.linked_document_id || ''} onChange={onLink}
+        title="保管庫の該当書類を紐づける"
+        className="text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200 max-w-[40%]">
+        <option value="">紐づけ…</option>
+        {docOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+    </div>
+  )
+}
+
+// ── 書類整理（保管庫・別画面）00〜12 フォルダ別アコーディオン ──
+function StorageBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
+  const docs = detail.documents || []
+  const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
+  const [aiUploading, setAiUploading] = useState(false)
+  // 既定: 書類のあるフォルダは展開、空フォルダは折りたたみ
+  const [collapsed, setCollapsed] = useState(() => new Set(CONS_FOLDERS.filter((f) => !docs.some((d) => d.folder_no === f.no)).map((f) => f.no)))
+  const toggle = (no) => setCollapsed((p) => { const n = new Set(p); n.has(no) ? n.delete(no) : n.add(no); return n })
 
   const changeStatus = async (doc, status) => {
     try {
@@ -659,7 +851,7 @@ function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
     }
   }
 
-  // 書類をアップロード→Geminiが内容を読み取り、該当する提出書類へ自動で振り分けて添付
+  // 書類をアップロード→Geminiが内容を読み取り、該当フォルダへ自動で振り分けて格納
   const onAiUpload = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -672,10 +864,10 @@ function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
         `${apiUrl}/api/construction/projects/${detail.id}/documents/auto-file`, fd,
         { headers: { Authorization: `Bearer ${token}` } })
       const c = data.classification
-      const where = `${data.document.category_no}. ${data.document.category} ＞ ${data.document.doc_name}`
+      const where = `${folderLabel(data.document.folder_no)} ＞ ${data.document.doc_name}`
       notify(c
-        ? `「${where}」に自動振り分けしました（確信度 ${Math.round((c.confidence || 0) * 100)}%）`
-        : `「${where}」に添付しました（AI判定なし。種別をご確認ください）`)
+        ? `「${where}」へ自動で振り分けました（確信度 ${Math.round((c.confidence || 0) * 100)}%）`
+        : `「${where}」へ格納しました（AI判定なし。フォルダをご確認ください）`)
       onReload()
     } catch (err) {
       notify(err.response?.data?.error || 'アップロードに失敗しました', 'error')
@@ -690,12 +882,12 @@ function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
           <h1 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <ListChecks className="w-5 h-5 text-brand-500" /> 提出書類チェックリスト
+            <FolderOpen className="w-5 h-5 text-brand-500" /> 書類整理（保管庫）
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、該当する提出書類へ自動で振り分けます">
+          <label className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1" title="アップロードした書類の内容をAIが読み取り、00〜12 のフォルダへ自動で振り分けます">
             {aiUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             AIで振り分けアップロード
             <input type="file" className="hidden" onChange={onAiUpload} disabled={aiUploading} />
@@ -706,50 +898,39 @@ function ChecklistBody({ detail, onReload, onEditDoc, onAddDoc, notify }) {
         </div>
       </div>
 
-      <Card className="px-4 py-3 mb-4">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">提出書類の進捗</span>
-          <span className="text-xs text-slate-500">{done}/{docs.length} 完了</span>
-        </div>
-        <ProgressBar done={done} total={docs.length} />
+      <Card className="px-4 py-3 mb-4 text-xs text-slate-500 dark:text-slate-400">
+        工事のあらゆる書類をフォルダ別に整理します。ここに入れた書類のうち検査で必要なものは、
+        <span className="font-semibold">検査書類チェックリスト</span>側で紐づけ・AI棚卸しにより自動で確認済みになります。（添付 {storedFiles} 件）
       </Card>
 
-      {docs.length === 0 ? (
-        <Card className="text-center py-8 text-slate-500 dark:text-slate-400 text-sm">書類がありません。</Card>
-      ) : (
-        <>
-          <div className="flex items-center justify-end gap-2 text-[11px] text-slate-400 mb-2">
-            <button onClick={expandAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて展開</button>
-            <span>/</span>
-            <button onClick={collapseAll} className="hover:text-slate-600 dark:hover:text-slate-200">すべて折りたたむ</button>
-          </div>
-          <div className="space-y-3">
-            {cats.map((cat) => {
-              const rows = docs.filter((d) => d.category_no === cat.no)
-              const catDone = rows.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
-              const isOpen = !collapsed.has(cat.no)
-              return (
-                <div key={cat.no} className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 overflow-hidden">
-                  <button onClick={() => toggleCat(cat.no)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
-                    <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
-                    <span className="text-xs font-bold text-white bg-brand-500 rounded-md w-5 h-5 flex items-center justify-center shrink-0">{cat.no}</span>
-                    <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left truncate">{cat.name}</h3>
-                    <span className="text-xs text-slate-400 shrink-0">{catDone}/{rows.length}</span>
-                  </button>
-                  {isOpen && (
-                    <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
-                      {rows.map((d) => (
-                        <DocRow key={d.id} doc={d} onChangeStatus={changeStatus} onEdit={() => onEditDoc(d)} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </>
-      )}
+      <div className="space-y-3">
+        {CONS_FOLDERS.map((f) => {
+          const rows = docs.filter((d) => d.folder_no === f.no)
+          const isOpen = !collapsed.has(f.no)
+          return (
+            <div key={f.no} className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+              <button onClick={() => toggle(f.no)}
+                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
+                <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                <span className="text-[11px] font-bold text-white bg-brand-500 rounded-md px-1.5 h-5 flex items-center justify-center shrink-0 tabular-nums">{String(f.no).padStart(2, '0')}</span>
+                <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left truncate">{f.name}</h3>
+                <span className="text-xs text-slate-400 shrink-0">{rows.length} 件</span>
+              </button>
+              {isOpen && (
+                rows.length === 0 ? (
+                  <div className="border-t border-slate-100 dark:border-ink-700 px-4 py-3 text-xs text-slate-400">書類なし</div>
+                ) : (
+                  <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
+                    {rows.map((d) => (
+                      <DocRow key={d.id} doc={d} onChangeStatus={changeStatus} onEdit={() => onEditDoc(d)} />
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1057,7 +1238,7 @@ function BoqSection({ detail, notify, onReload }) {
       )}
       {selectedVersion === 'original' && !loading && !boq?.imported_at && (
         <p className="text-xs text-slate-400 py-2">
-          数量書(内訳書)を取込むと、工種別の構成比率を算出し、数量書に無い工種の施工計画書などをチェックリストから対象外にできます。
+          数量書(内訳書)を取込むと、工種別の構成比率を算出します。
         </p>
       )}
       {selectedVersion === 'original' && !loading && boq?.imported_at && (
@@ -1387,7 +1568,7 @@ function NewProjectModal({ onClose, onCreated, onError }) {
     try {
       const payload = { ...f, generate_checklist: genChecklist }
       const { data } = await axios.post(`${apiUrl}/api/construction/projects`, payload, authConfig())
-      onCreated(`工事を登録しました（書類 ${data.generated_documents || 0} 件を自動生成）`)
+      onCreated(`工事を登録しました（検査チェック項目 ${data.generated_documents || 0} 件を生成）`)
     } catch (e) {
       onError(e.response?.data?.error || '登録に失敗しました')
     } finally {
@@ -1430,7 +1611,7 @@ function NewProjectModal({ onClose, onCreated, onError }) {
       </div>
       <label className="flex items-center gap-2 mt-4 text-sm text-slate-700 dark:text-slate-200">
         <input type="checkbox" checked={genChecklist} onChange={(e) => setGenChecklist(e.target.checked)} />
-        必要書類チェックリストを自動生成する（契約日・着工日・完成検査日から締切も自動計算）
+        検査書類チェックリストを自動生成する（新設／改修の区分に応じた項目を生成）
       </label>
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
@@ -1543,9 +1724,9 @@ function EditDocModal({ doc, onClose, onSaved, onError }) {
   )
 }
 
-// ── 書類の手動追加 ──
+// ── 書類の手動追加（書類整理フォルダへ）──
 function AddDocModal({ projectId, onClose, onAdded, onError }) {
-  const [f, setF] = useState({ category_no: 4, doc_name: '', subcategory: '', trade: '共通', due_date: '' })
+  const [f, setF] = useState({ folder_no: 4, doc_name: '', trade: '共通' })
   const [saving, setSaving] = useState(false)
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
 
@@ -1553,10 +1734,8 @@ function AddDocModal({ projectId, onClose, onAdded, onError }) {
     if (!f.doc_name.trim()) { onError('書類名は必須です'); return }
     setSaving(true)
     try {
-      const cat = CATEGORIES.find((c) => c.no === Number(f.category_no))
       await axios.post(`${apiUrl}/api/construction/projects/${projectId}/documents`, {
-        category_no: Number(f.category_no), category: cat?.name || '',
-        subcategory: f.subcategory, doc_name: f.doc_name, trade: f.trade, due_date: f.due_date || null,
+        folder_no: Number(f.folder_no), doc_name: f.doc_name, trade: f.trade,
       }, authConfig())
       onAdded()
     } catch (e) {
@@ -1567,11 +1746,9 @@ function AddDocModal({ projectId, onClose, onAdded, onError }) {
   return (
     <ModalShell title="書類を追加" onClose={onClose}>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="大分類"><select className={inputCls} value={f.category_no} onChange={set('category_no')}>{CATEGORIES.map((c) => <option key={c.no} value={c.no}>{c.no}. {c.name}</option>)}</select></Field>
+        <Field label="フォルダ"><select className={inputCls} value={f.folder_no} onChange={set('folder_no')}>{CONS_FOLDERS.map((c) => <option key={c.no} value={c.no}>{String(c.no).padStart(2, '0')}. {c.name}</option>)}</select></Field>
         <Field label="工種"><input className={inputCls} value={f.trade} onChange={set('trade')} /></Field>
         <div className="col-span-2"><Field label="書類名 *"><input className={inputCls} value={f.doc_name} onChange={set('doc_name')} /></Field></div>
-        <Field label="中分類"><input className={inputCls} value={f.subcategory} onChange={set('subcategory')} /></Field>
-        <Field label="締切"><input className={inputCls} type="date" value={f.due_date} onChange={set('due_date')} /></Field>
       </div>
       <div className="flex justify-end gap-2 mt-5">
         <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
