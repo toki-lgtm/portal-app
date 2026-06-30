@@ -719,7 +719,9 @@ function ChecklistBody({ detail, onReload, onOpenStorage, notify }) {
       const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-sweep`, {}, authConfig())
       notify(data.skipped === 'no_api_key'
         ? 'AIが未設定のため棚卸しできません'
-        : `AI棚卸し完了：${data.matched || 0} 件を自動で確認済みにしました`)
+        : (data.examined || 0) === 0
+          ? '新たに精査する書類はありませんでした（すべて照合済み）'
+          : `AI棚卸し完了：${data.examined} 件を精査し ${data.matched || 0} 件を確認済みにしました`)
       onReload()
     } catch (e) {
       notify(e.response?.data?.error || 'AI棚卸しに失敗しました', 'error')
