@@ -2605,8 +2605,8 @@ async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
     const freeRowH = Math.round(freeFont * 1.4)
     const freePadY = Math.round(freeFont * 0.4)
 
-    // 黒板の幅は固定（内容で伸縮させない）。画像幅の 50%。
-    const boxW = Math.round(W * 0.5)
+    // 黒板の幅は固定（内容で伸縮させない）。画像幅の 1/3。
+    const boxW = Math.round(W / 3)
 
     // 表のラベル列幅（ラベル文字に合わせる）／値列は残り
     ctx.font = `bold ${gridFont}px sans-serif`
@@ -2711,8 +2711,9 @@ function PhotoBody({ detail, notify }) {
   const [editNoteNode, setEditNoteNode] = useState(null)
   const [uploadingNodes, setUploadingNodes] = useState(new Set()) // node IDs
 
-  const loadNodes = useCallback(async () => {
-    setLoading(true)
+  // silent=true のときは全画面ローディングを出さず裏で更新（撮影/削除後の暗転防止）
+  const loadNodes = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const { data } = await axios.get(
         `${apiUrl}/api/construction/projects/${detail.id}/photo-nodes`,
@@ -2724,12 +2725,12 @@ function PhotoBody({ detail, notify }) {
     } catch (e) {
       notify(e.response?.data?.error || '撮影ノードの取得に失敗しました', 'error')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [detail.id, notify])
 
-  const loadPhotos = useCallback(async () => {
-    setPhotosLoading(true)
+  const loadPhotos = useCallback(async (silent = false) => {
+    if (!silent) setPhotosLoading(true)
     try {
       const { data } = await axios.get(
         `${apiUrl}/api/construction/projects/${detail.id}/photos`,
@@ -2737,7 +2738,7 @@ function PhotoBody({ detail, notify }) {
       )
       setPhotos(data || [])
     } catch { /* noop */ } finally {
-      setPhotosLoading(false)
+      if (!silent) setPhotosLoading(false)
     }
   }, [detail.id])
 
@@ -2755,7 +2756,7 @@ function PhotoBody({ detail, notify }) {
         `${apiUrl}/api/construction/projects/${detail.id}/photo-nodes/generate`,
         { editions }, authConfig()
       )
-      await loadNodes()
+      await loadNodes(true)
       notify('撮影ツリーを生成しました')
     } catch (e) {
       notify(e.response?.data?.error || 'ツリー生成に失敗しました', 'error')
@@ -2832,7 +2833,7 @@ function PhotoBody({ detail, notify }) {
           { headers: { Authorization: `Bearer ${token}` } }
         )
       }
-      await Promise.all([loadPhotos(), loadNodes()])
+      await Promise.all([loadPhotos(true), loadNodes(true)])
       notify(`${toSend.length} 枚をアップロードしました`)
     } catch (e) {
       notify(e.response?.data?.error || 'アップロードに失敗しました', 'error')
@@ -2846,7 +2847,7 @@ function PhotoBody({ detail, notify }) {
     try {
       await axios.delete(`${apiUrl}/api/construction/photos/${photoId}`, authConfig())
       setPhotos((prev) => prev.filter((p) => p.id !== photoId))
-      await loadNodes() // photo_count を更新
+      await loadNodes(true) // photo_count を更新
       notify('写真を削除しました')
     } catch (e) {
       notify(e.response?.data?.error || '削除に失敗しました', 'error')
@@ -2927,7 +2928,7 @@ function PhotoBody({ detail, notify }) {
           <AddPhotoNodeModal
             projectId={detail.id}
             onClose={() => setAddNodeOpen(false)}
-            onAdded={() => { setAddNodeOpen(false); loadNodes(); notify('撮影対象を追加しました') }}
+            onAdded={() => { setAddNodeOpen(false); loadNodes(true); notify('撮影対象を追加しました') }}
             onError={(m) => notify(m, 'error')}
           />
         )}
@@ -3039,7 +3040,7 @@ function PhotoBody({ detail, notify }) {
         <AddPhotoNodeModal
           projectId={detail.id}
           onClose={() => setAddNodeOpen(false)}
-          onAdded={() => { setAddNodeOpen(false); loadNodes(); notify('撮影対象を追加しました') }}
+          onAdded={() => { setAddNodeOpen(false); loadNodes(true); notify('撮影対象を追加しました') }}
           onError={(m) => notify(m, 'error')}
         />
       )}
