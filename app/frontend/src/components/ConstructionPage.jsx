@@ -112,6 +112,82 @@ function ProgressBar({ done, total }) {
   )
 }
 
+// ── セクション開閉の共通フック（工事詳細の各セクション用）──
+//   開閉状態は localStorage に保存。キーはセクション種別ごと（工事横断で共通）なので、
+//   一度畳めばどの工事を開いても同じセクションは畳まれた状態で表示される。
+function useSectionCollapse(key, defaultOpen = true) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(`constr_section_${key}`)
+      return v === null ? defaultOpen : v === '1'
+    } catch {
+      return defaultOpen
+    }
+  })
+  const toggle = () => setOpen((prev) => {
+    const next = !prev
+    try {
+      localStorage.setItem(`constr_section_${key}`, next ? '1' : '0')
+    } catch {
+      /* localStorage が使えなくても開閉自体は動かす */
+    }
+    return next
+  })
+  return [open, toggle]
+}
+
+// ── 開閉用シェブロン（クリックで開閉。見出しの先頭に置く）──
+function SectionChevron({ open, onClick }) {
+  return (
+    <button type="button" onClick={onClick} aria-expanded={open}
+      className="shrink-0 -ml-1 mr-0.5 p-0.5 rounded hover:bg-slate-100 dark:hover:bg-ink-700 text-slate-400">
+      <ChevronDown className={`w-4 h-4 transition-transform ${open ? '' : '-rotate-90'}`} />
+    </button>
+  )
+}
+
+// ── ステータスごとの折りたたみグループ（工事一覧用）──
+//   ダッシュボードの CollapsibleSection と同じ挙動。見出し横のシェブロンで開閉し、
+//   開閉状態は localStorage に保存して端末ごと・利用者ごとに維持する。
+//   defaultOpen=false の完成・引渡済／保管は初期状態で畳んでおく。
+function StatusGroup({ status, count, defaultOpen = true, children }) {
+  const def = PROJ_STATUS_MAP[status] || { label: status, tone: 'neutral' }
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(`constr_list_collapse_${status}`)
+      return v === null ? defaultOpen : v === '1'
+    } catch {
+      return defaultOpen
+    }
+  })
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(`constr_list_collapse_${status}`, next ? '1' : '0')
+      } catch {
+        /* localStorage が使えなくても開閉自体は動かす */
+      }
+      return next
+    })
+  }
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 mb-2 text-left"
+      >
+        <ChevronDown className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <ProjStatusBadge status={status} />
+        <span className="text-xs text-slate-400 shrink-0">{count} 件</span>
+      </button>
+      {open && <div className="grid gap-3">{children}</div>}
+    </section>
+  )
+}
+
 export default function ConstructionPage({ onBack }) {
   const [view, setView] = useState('list') // 'list' | 'detail' | 'checklist' | 'photos'
   const [projects, setProjects] = useState([])
@@ -266,26 +342,39 @@ export default function ConstructionPage({ onBack }) {
             工事がありません。「工事を追加」から登録してください。
           </Card>
         ) : (
-          <div className="grid gap-3">
-            {filtered.map((p) => (
-              <button key={p.id} onClick={() => openDetail(p.id)}
-                className="text-left bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 px-5 py-4 hover:border-brand-300 dark:hover:border-brand-500/50 transition">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <ProjStatusBadge status={p.status} />
-                      <Badge tone="neutral">{p.construction_type}・{p.work_category}</Badge>
-                    </div>
-                    <h3 className="font-bold text-slate-900 dark:text-white truncate">{p.project_name}</h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      {p.location || '場所未設定'}{p.site_agent_name ? ` ／ 現場代理人: ${p.site_agent_name}` : ''}
-                    </p>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-slate-300 shrink-0 mt-1" />
-                </div>
-                <div className="mt-3"><ProgressBar done={p.doc_done} total={p.doc_total} /></div>
-              </button>
-            ))}
+          <div className="space-y-5">
+            {/* 既知ステータスに無い工事も取りこぼさないよう、末尾に一覧化する順序を作る */}
+            {[...PROJ_STATUS.map((s) => s.key),
+              ...[...new Set(filtered.map((p) => p.status))].filter((k) => !PROJ_STATUS_MAP[k]),
+            ].map((statusKey) => {
+              const rows = filtered.filter((p) => p.status === statusKey)
+              if (rows.length === 0) return null
+              // 完成・引渡済／保管は初期状態で畳む（現在進行中の工事を上に見せる）
+              const defaultOpen = !['completed', 'archived'].includes(statusKey)
+              return (
+                <StatusGroup key={statusKey} status={statusKey} count={rows.length} defaultOpen={defaultOpen}>
+                  {rows.map((p) => (
+                    <button key={p.id} onClick={() => openDetail(p.id)}
+                      className="text-left bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 px-5 py-4 hover:border-brand-300 dark:hover:border-brand-500/50 transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <ProjStatusBadge status={p.status} />
+                            <Badge tone="neutral">{p.construction_type}・{p.work_category}</Badge>
+                          </div>
+                          <h3 className="font-bold text-slate-900 dark:text-white truncate">{p.project_name}</h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                            {p.location || '場所未設定'}{p.site_agent_name ? ` ／ 現場代理人: ${p.site_agent_name}` : ''}
+                          </p>
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-slate-300 shrink-0 mt-1" />
+                      </div>
+                      <div className="mt-3"><ProgressBar done={p.doc_done} total={p.doc_total} /></div>
+                    </button>
+                  ))}
+                </StatusGroup>
+              )
+            })}
           </div>
         )}
 
@@ -412,6 +501,7 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
   const done = docs.filter((d) => ['submitted', 'approved', 'na'].includes(d.status)).length
   const [reflectBusy, setReflectBusy] = useState(false)
   const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
+  const [basicOpen, toggleBasic] = useSectionCollapse('basic_info', true)
 
   // 契約書・設計図書をアップロード→AIが工事情報を読み取り→確認のうえ既存の工事内容へ反映
   const onContractReflect = async (e) => {
@@ -472,14 +562,23 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
       </div>
 
       <Card className="px-4 py-3 mb-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-y-2 gap-x-4 text-sm">
-          <Meta label="工事番号" value={detail.project_code} />
-          <Meta label="契約日" value={fmtDate(detail.contract_date)} />
-          <Meta label="工期" value={`${fmtDate(detail.start_date)} 〜 ${fmtDate(detail.end_date)}`} />
-          <Meta label="完成検査(予定)" value={fmtDate(detail.completion_inspection_date)} />
-          <Meta label="現場代理人" value={detail.site_agent_name} />
-          <Meta label="監理技術者" value={detail.chief_engineer_name} />
+        <div className="flex items-center gap-1.5">
+          <SectionChevron open={basicOpen} onClick={toggleBasic} />
+          <button type="button" onClick={toggleBasic}
+            className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 flex-1 text-left">
+            <FileSpreadsheet className="w-4 h-4 text-brand-500" /> 基本情報
+          </button>
         </div>
+        {basicOpen && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-y-2 gap-x-4 text-sm mt-3">
+            <Meta label="工事番号" value={detail.project_code} />
+            <Meta label="契約日" value={fmtDate(detail.contract_date)} />
+            <Meta label="工期" value={`${fmtDate(detail.start_date)} 〜 ${fmtDate(detail.end_date)}`} />
+            <Meta label="完成検査(予定)" value={fmtDate(detail.completion_inspection_date)} />
+            <Meta label="現場代理人" value={detail.site_agent_name} />
+            <Meta label="監理技術者" value={detail.chief_engineer_name} />
+          </div>
+        )}
       </Card>
 
       <BoqSection detail={detail} notify={notify} onReload={onReload} />
@@ -845,6 +944,7 @@ function BoqSection({ detail, notify, onReload }) {
   const [uploading, setUploading] = useState(false)
   const [showItems, setShowItems] = useState(false)
   const [naModal, setNaModal] = useState(null) // NA候補（取込直後の承認用）
+  const [open, toggleOpen] = useSectionCollapse('boq', true)
 
   // 版切替: 'original' | change.id (number文字列)
   const [selectedVersion, setSelectedVersion] = useState('original')
@@ -917,8 +1017,11 @@ function BoqSection({ detail, notify, onReload }) {
   return (
     <Card className="px-4 py-3 mb-4">
       <div className="flex items-center justify-between gap-3 mb-2">
-        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-          <BarChart3 className="w-4 h-4 text-brand-500" /> 数量内訳・構成比率
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 min-w-0">
+          <SectionChevron open={open} onClick={toggleOpen} />
+          <button type="button" onClick={toggleOpen} className="flex items-center gap-1.5 truncate text-left">
+            <BarChart3 className="w-4 h-4 text-brand-500 shrink-0" /> 数量内訳・構成比率
+          </button>
         </span>
         <div className="flex items-center gap-2">
           {/* 版切替セレクタ */}
@@ -947,6 +1050,7 @@ function BoqSection({ detail, notify, onReload }) {
         </div>
       </div>
 
+      {open && (<>
       {/* ── 当初版表示 ── */}
       {selectedVersion === 'original' && loading && (
         <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-slate-400" /></div>
@@ -1108,6 +1212,7 @@ function BoqSection({ detail, notify, onReload }) {
           )}
         </>
       )}
+      </>)}
 
       {naModal && (
         <NaConfirmModal
@@ -1515,6 +1620,7 @@ function DateDiff({ before, after }) {
 function DesignChangeSection({ detail, notify, onReload }) {
   const [changes, setChanges] = useState(detail.design_changes || [])
   const [loading, setLoading] = useState(false)
+  const [open, toggleOpen] = useSectionCollapse('design_change', true)
   const [showNew, setShowNew] = useState(false)
   const [editTarget, setEditTarget] = useState(null)
   const [filesTarget, setFilesTarget] = useState(null)  // { change, mode: 'files' | 'boq' }
@@ -1605,10 +1711,13 @@ function DesignChangeSection({ detail, notify, onReload }) {
     <Card className="px-4 py-3 mb-4">
       {/* ヘッダ */}
       <div className="flex items-center justify-between gap-3 mb-3">
-        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-          <GitBranch className="w-4 h-4 text-brand-500" /> 設計変更（変更契約）
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 min-w-0">
+          <SectionChevron open={open} onClick={toggleOpen} />
+          <button type="button" onClick={toggleOpen} className="flex items-center gap-1.5 truncate text-left">
+            <GitBranch className="w-4 h-4 text-brand-500 shrink-0" /> 設計変更（変更契約）
+          </button>
           {changeCount > 0 && (
-            <span className="ml-1 text-[11px] font-bold bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300 rounded-full px-1.5 py-0.5">
+            <span className="ml-1 text-[11px] font-bold bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300 rounded-full px-1.5 py-0.5 shrink-0">
               {changeCount}回
             </span>
           )}
@@ -1640,6 +1749,7 @@ function DesignChangeSection({ detail, notify, onReload }) {
         </div>
       </div>
 
+      {open && (<>
       {/* 対比サマリカード */}
       {!hasOriginal ? (
         <p className="text-xs text-slate-400 py-1 mb-3">設計変更なし（変更を追加すると当初値が自動保存されます）</p>
@@ -1782,6 +1892,7 @@ function DesignChangeSection({ detail, notify, onReload }) {
           </table>
         </div>
       )}
+      </>)}
 
       {/* モーダル群 */}
       {showNew && (
