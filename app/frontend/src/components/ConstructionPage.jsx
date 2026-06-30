@@ -2547,6 +2547,68 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 // ── 工事写真管理 ─────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════
 
+// 角丸矩形パス（小黒板の背景用）
+function kbRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+// 画像の左下に「電子小黒板」を焼き込んで新しい File を返す。
+// 失敗時（古い端末等）は元ファイルをそのまま返す（撮影を止めない）。
+async function burnBlackboard(file, lines) {
+  try {
+    // EXIF の向きを反映してデコード（スマホ写真の回転ズレ対策）
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+    const W = bitmap.width, H = bitmap.height
+    const canvas = document.createElement('canvas')
+    canvas.width = W; canvas.height = H
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bitmap, 0, 0, W, H)
+    if (bitmap.close) bitmap.close()
+
+    const rows = lines.filter(Boolean)
+    const fontSize = Math.max(Math.round(W / 52), 14)
+    const lineH = Math.round(fontSize * 1.5)
+    const padX = Math.round(fontSize * 0.9)
+    const padY = Math.round(fontSize * 0.7)
+    ctx.font = `bold ${fontSize}px sans-serif`
+    let maxW = 0
+    for (const r of rows) maxW = Math.max(maxW, ctx.measureText(r).width)
+    const boxW = Math.min(maxW + padX * 2, W * 0.92)
+    const boxH = rows.length * lineH + padY * 2
+    const margin = Math.round(W / 60)
+    const x = margin
+    const y = H - boxH - margin
+    const radius = Math.round(fontSize * 0.4)
+
+    // 黒板風の背景（濃い半透明）＋白枠
+    ctx.fillStyle = 'rgba(17, 33, 28, 0.82)'
+    kbRoundRect(ctx, x, y, boxW, boxH, radius); ctx.fill()
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)'
+    ctx.lineWidth = Math.max(1, Math.round(fontSize / 12))
+    kbRoundRect(ctx, x, y, boxW, boxH, radius); ctx.stroke()
+
+    // 文字（白・上揃え。長い行は枠内に収まるよう自動圧縮）
+    ctx.fillStyle = '#ffffff'
+    ctx.textBaseline = 'top'
+    rows.forEach((r, i) => {
+      ctx.fillText(r, x + padX, y + padY + i * lineH, boxW - padX * 2)
+    })
+
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.9))
+    if (!blob) return file
+    const base = (file.name || 'photo').replace(/\.[^.]+$/, '')
+    return new File([blob], `${base}_kb.jpg`, { type: 'image/jpeg' })
+  } catch {
+    return file
+  }
+}
+
 // ── 工事写真 メインビュー ──
 function PhotoBody({ detail, notify }) {
   const [nodes, setNodes] = useState([])
@@ -2682,11 +2744,29 @@ function PhotoBody({ detail, notify }) {
     }
   }
 
-  const uploadPhotos = async (nodeId, files) => {
+  const uploadPhotos = async (nodeId, files, opts = {}) => {
     setUploadingNodes((s) => { const n = new Set(s); n.add(nodeId); return n })
     try {
       const token = localStorage.getItem('authToken')
-      for (const file of files) {
+      let toSend = Array.from(files)
+      // 撮影時は左下に電子小黒板（工事名/工事種別/工種/項目/タイミング）を焼き込む
+      if (opts.blackboard) {
+        const node = nodes.find((n) => n.id === nodeId)
+        if (node) {
+          const itemText = node.photo_item && node.photo_item !== node.target
+            ? `${node.photo_item}／${node.target || ''}`
+            : (node.target || node.photo_item || '')
+          const lines = [
+            `工事名：${detail.project_name || ''}`,
+            `工事種別：${node.edition || ''}`,
+            `工種：${node.trade || ''}`,
+            `項目：${itemText}`,
+            `タイミング：${node.timing || ''}`,
+          ]
+          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, lines)))
+        }
+      }
+      for (const file of toSend) {
         const fd = new FormData()
         fd.append('photo', file)
         fd.append('node_id', nodeId)
@@ -2697,7 +2777,7 @@ function PhotoBody({ detail, notify }) {
         )
       }
       await Promise.all([loadPhotos(), loadNodes()])
-      notify(`${files.length} 枚をアップロードしました`)
+      notify(`${toSend.length} 枚をアップロードしました`)
     } catch (e) {
       notify(e.response?.data?.error || 'アップロードに失敗しました', 'error')
     } finally {
@@ -2878,7 +2958,7 @@ function PhotoBody({ detail, notify }) {
                                 uploading={uploadingNodes.has(node.id)}
                                 photosLoading={photosLoading}
                                 onToggle={() => toggleNode(node.id)}
-                                onUpload={(files) => uploadPhotos(node.id, files)}
+                                onUpload={(files, opts) => uploadPhotos(node.id, files, opts)}
                                 onDeletePhoto={deletePhoto}
                                 onOpenLightbox={(p) => setLightbox(p)}
                                 onPatchNode={(body) => patchNode(node.id, body)}
@@ -3018,7 +3098,7 @@ function PhotoNodeRow({
                 capture="environment"
                 className="hidden"
                 onChange={(e) => {
-                  if (e.target.files?.length) onUpload(Array.from(e.target.files))
+                  if (e.target.files?.length) onUpload(Array.from(e.target.files), { blackboard: true })
                   e.target.value = ''
                 }}
                 disabled={uploading}
