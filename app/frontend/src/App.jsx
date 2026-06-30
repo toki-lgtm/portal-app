@@ -22,6 +22,7 @@ import {
   Bug,
   FolderOpen,
   BookOpen,
+  ChevronDown,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -185,6 +186,56 @@ function StatCard({ icon: Icon, iconClass, label, value, unit, sub }) {
       </p>
       {sub && <div className="mt-1 text-xs">{sub}</div>}
     </Card>
+  )
+}
+
+/**
+ * ダッシュボードの各ブロックを折りたたみ可能にするラッパー。
+ * 見出し横のシェブロンで開閉でき、状態は localStorage に保存して
+ * リロード後も維持する（端末ごと・利用者ごとの好みで畳める）。
+ * action: 見出し右端に出す任意の要素（例: 入札管理へ遷移するボタン）。
+ */
+function CollapsibleSection({ storageKey, icon: Icon, title, action, defaultOpen = true, className = '', children }) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const v = localStorage.getItem(`dash_collapse_${storageKey}`)
+      return v === null ? defaultOpen : v === '1'
+    } catch {
+      return defaultOpen
+    }
+  })
+
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(`dash_collapse_${storageKey}`, next ? '1' : '0')
+      } catch {
+        /* localStorage が使えなくても開閉自体は動かす */
+      }
+      return next
+    })
+  }
+
+  return (
+    <section className={className}>
+      <div className="flex items-center gap-2 mb-4">
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className="flex items-center gap-2 group flex-1 min-w-0 text-left"
+        >
+          <ChevronDown
+            className={`w-5 h-5 text-slate-400 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+          />
+          {Icon && <Icon className="w-5 h-5 text-brand-500 shrink-0" />}
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white truncate">{title}</h2>
+        </button>
+        {action}
+      </div>
+      {open && children}
+    </section>
   )
 }
 
@@ -579,16 +630,24 @@ function BidsKpiSection({ bidStats, onOpen }) {
   const dueCount = s.due_soon?.length || 0
 
   return (
-    <section className="mb-8">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="flex items-center gap-2 mb-4 group"
-      >
-        <Gavel className="w-5 h-5 text-brand-500" />
-        <h2 className="text-lg font-bold text-slate-900 dark:text-white">入札案件の状況</h2>
-        <ArrowRight className="w-4 h-4 text-brand-400 group-hover:translate-x-0.5 transition" />
-      </button>
+    <CollapsibleSection
+      storageKey="bids"
+      icon={Gavel}
+      title="入札案件の状況"
+      className="mb-8"
+      action={
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label="入札管理を開く"
+          title="入札管理を開く"
+          className="shrink-0 flex items-center gap-1 text-sm font-semibold text-brand-600 dark:text-brand-400 hover:gap-2 transition-all"
+        >
+          <span className="hidden sm:inline">開く</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      }
+    >
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={Activity}
@@ -629,7 +688,7 @@ function BidsKpiSection({ bidStats, onOpen }) {
           sub={<span className="text-slate-400">{s.win_rate_count.won}勝 / {s.win_rate_count.lost}敗</span>}
         />
       </div>
-    </section>
+    </CollapsibleSection>
   )
 }
 
@@ -735,13 +794,9 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
           <>
             {/* 安全パトロール状況サマリ（show_kpi && statsが取得できた場合のみ表示） */}
             {showKpi && stats && (
-              <div className="mb-2">
-                <div className="flex items-center gap-2 mb-4">
-                  <ShieldCheck className="w-5 h-5 text-brand-500" />
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">安全パトロール状況</h2>
-                </div>
+              <CollapsibleSection storageKey="patrol" icon={ShieldCheck} title="安全パトロール状況" className="mb-2">
                 <StatsSection stats={stats} />
-              </div>
+              </CollapsibleSection>
             )}
 
             {/* 入札案件の状況（入札担当のみ・bidStats取得時のみ表示） */}
@@ -856,35 +911,37 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
             )}
 
             {/* お知らせカード（常設）＋文書回覧カード＋最近の点検 */}
-            <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-8">
-              {/* お知らせ（常設） */}
-              <div>
-                <AnnouncementsCard onOpenAnnouncements={() => onOpenInternal?.('announcements')} />
-              </div>
+            <CollapsibleSection storageKey="info" icon={Megaphone} title="お知らせ・回覧" className="mt-8">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* お知らせ（常設） */}
+                <div>
+                  <AnnouncementsCard onOpenAnnouncements={() => onOpenInternal?.('announcements')} />
+                </div>
 
-              {/* 文書回覧（常設） */}
-              <div>
-                <DocumentsCard onOpenDocuments={() => onOpenInternal?.('documents')} />
-              </div>
+                {/* 文書回覧（常設） */}
+                <div>
+                  <DocumentsCard onOpenDocuments={() => onOpenInternal?.('documents')} />
+                </div>
 
-              {/* 最近の点検（show_kpi && statsが取得できた場合のみ） */}
-              {showKpi && stats && (
-                <>
-                  <div>
-                    <RecentActivity recent={stats.recent || []} />
-                  </div>
-                  <div className="bg-gradient-to-br from-brand-700 to-brand-900 dark:from-brand-800 dark:to-ink-900 rounded-2xl p-6 text-white flex flex-col border border-transparent dark:border-ink-700">
-                    <ShieldCheck className="w-8 h-8 mb-3 text-accent-400" />
-                    <h3 className="font-bold text-lg mb-1">安全第一</h3>
-                    <p className="text-brand-100 dark:text-slate-300 text-sm flex-1">
-                      {stats.issues_open > 0
-                        ? `現在 ${stats.issues_open} 件の是正対応が進行中です。期限管理を徹底しましょう。`
-                        : '未対応の是正はありません。引き続き安全管理を継続しましょう。'}
-                    </p>
-                  </div>
-                </>
-              )}
-            </section>
+                {/* 最近の点検（show_kpi && statsが取得できた場合のみ） */}
+                {showKpi && stats && (
+                  <>
+                    <div>
+                      <RecentActivity recent={stats.recent || []} />
+                    </div>
+                    <div className="bg-gradient-to-br from-brand-700 to-brand-900 dark:from-brand-800 dark:to-ink-900 rounded-2xl p-6 text-white flex flex-col border border-transparent dark:border-ink-700">
+                      <ShieldCheck className="w-8 h-8 mb-3 text-accent-400" />
+                      <h3 className="font-bold text-lg mb-1">安全第一</h3>
+                      <p className="text-brand-100 dark:text-slate-300 text-sm flex-1">
+                        {stats.issues_open > 0
+                          ? `現在 ${stats.issues_open} 件の是正対応が進行中です。期限管理を徹底しましょう。`
+                          : '未対応の是正はありません。引き続き安全管理を継続しましょう。'}
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            </CollapsibleSection>
           </>
         )}
       </main>
