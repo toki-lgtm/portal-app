@@ -2945,6 +2945,10 @@ function PhotoNodeRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm text-slate-800 dark:text-slate-200 truncate">
+              {/* 撮影項目(工法/部位)を併記。同じ「施工状況」でも工法違いを見分けられるようにする */}
+              {node.photo_item && node.photo_item !== node.target && (
+                <span className="text-slate-500 dark:text-slate-400">{node.photo_item}：</span>
+              )}
               {node.target || node.photo_item || '—'}
             </span>
             {node.required && node.is_active && <Badge tone="warning">必須</Badge>}
