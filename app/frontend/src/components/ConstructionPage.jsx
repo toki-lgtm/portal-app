@@ -2554,6 +2554,36 @@ function PhotoBody({ detail, notify }) {
   const [presentTrades, setPresentTrades] = useState([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  // 撮影ツリー生成の対象「版(edition)」。未指定だと全版(新築・改修・電気・機械・解体)が
+  // 取り込まれ、改修工事なのに新築用カタログまで出てしまうため、ここで版を絞る。
+  // 工事名に「改修/改築」が含まれれば既定を改修に、それ以外は新築(建築)に寄せる。
+  const ALL_EDITIONS = ['建築', '改修', '電気', '機械', '解体']
+  const [editions, setEditions] = useState(
+    () => /改修|改築/.test(detail?.project_name || '') ? ['改修'] : ['建築']
+  )
+  const toggleEdition = (e) =>
+    setEditions((prev) => prev.includes(e) ? prev.filter((x) => x !== e) : [...prev, e])
+  const editionChips = (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-slate-500 dark:text-slate-400">対象の版:</span>
+      {ALL_EDITIONS.map((e) => {
+        const on = editions.includes(e)
+        return (
+          <button
+            key={e}
+            type="button"
+            onClick={() => toggleEdition(e)}
+            className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+              on
+                ? 'bg-brand-500 text-white border-brand-500'
+                : 'bg-transparent text-slate-500 dark:text-slate-400 border-slate-300 dark:border-slate-600 hover:border-brand-400'
+            }`}>
+            {e}
+          </button>
+        )
+      })}
+    </div>
+  )
   const [photos, setPhotos] = useState([]) // project 全写真
   const [photosLoading, setPhotosLoading] = useState(false)
   const [expandedNodes, setExpandedNodes] = useState(new Set())
@@ -2597,11 +2627,15 @@ function PhotoBody({ detail, notify }) {
   useEffect(() => { loadPhotos() }, [loadPhotos])
 
   const doGenerate = async () => {
+    if (editions.length === 0) {
+      notify('対象の版を1つ以上選んでください', 'error')
+      return
+    }
     setGenerating(true)
     try {
       await axios.post(
         `${apiUrl}/api/construction/projects/${detail.id}/photo-nodes/generate`,
-        {}, authConfig()
+        { editions }, authConfig()
       )
       await loadNodes()
       notify('撮影ツリーを生成しました')
@@ -2613,8 +2647,12 @@ function PhotoBody({ detail, notify }) {
   }
 
   const regenTree = async () => {
+    if (editions.length === 0) {
+      notify('対象の版を1つ以上選んでください', 'error')
+      return
+    }
     const ok = window.confirm(
-      '撮影ツリーを再生成します。\n' +
+      `撮影ツリーを再生成します。\n対象の版: ${editions.join('・')}\n` +
       '既存のノードは温存され、不足分のみ追加されます（冪等）。\nよろしいですか？'
     )
     if (!ok) return
@@ -2736,9 +2774,13 @@ function PhotoBody({ detail, notify }) {
             </p>
           )}
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            ボタンを押すと工種に応じた撮影対象一覧が自動作成されます。
+            選んだ版 × 数量書の工種で、撮影対象一覧が自動作成されます。
+          </p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+            改修工事は「改修」だけを選ぶと、新築用の項目が混ざりません。
           </p>
         </div>
+        {editionChips}
         <Button onClick={doGenerate} disabled={generating}>
           {generating
             ? <><Loader2 className="w-4 h-4 animate-spin mr-1" />生成中...</>
@@ -2779,12 +2821,15 @@ function PhotoBody({ detail, notify }) {
           </button>
           <button
             onClick={regenTree}
-            title="冪等な再生成：既存ノードは温存し不足分のみ追加"
+            title="選んだ版で再生成。既存ノードは温存し、不足分のみ追加します"
             className="text-xs font-semibold text-slate-500 dark:text-slate-400 hover:underline flex items-center gap-1">
             <RefreshCw className="w-3.5 h-3.5" /> 再生成（既存温存）
           </button>
         </div>
       </div>
+
+      {/* 再生成の対象版セレクタ（選んだ版で不足分を追加） */}
+      <div className="mb-4">{editionChips}</div>
 
       {/* 工種グループ */}
       {Object.keys(tradeMap).length === 0 ? (
