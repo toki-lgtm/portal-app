@@ -17,6 +17,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* スマホ等で横はみ出しが出てもページ幅を端末幅に収める（横スクロール/全体縮小を防ぐ）。
+   clip はスクロールコンテナを作らないため sticky ヘッダを壊さない。
+   幅広テーブル等は各所で overflow-x-auto により内部スクロールさせる。 */
+html,
+body {
+  overflow-x: clip;
+  max-width: 100%;
+}
+
 /* テーマ別の地色（トークン: slate-50 / ink-950） */
 body {
   @apply bg-slate-100 text-slate-800;

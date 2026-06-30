@@ -207,7 +207,7 @@ function AnnouncementDetailModal({ item, canAdmin, onClose, onRead, onAck, onEdi
                 )}
               </div>
               {reads.recipients && reads.recipients.length > 0 && (
-                <div className="max-h-48 overflow-y-auto">
+                <div className="max-h-48 overflow-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="text-slate-400 text-left border-b border-slate-200 dark:border-ink-600">
