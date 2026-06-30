@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Plus, X, Save, Search, Loader2, Building2, ListChecks,
@@ -148,18 +148,50 @@ export default function ConstructionPage({ onBack }) {
 
   useEffect(() => { loadList() }, [loadList])
 
-  const openDetail = useCallback(async (id) => {
-    setDetailLoading(true); setView('detail')
+  // 工事詳細を取得するだけ（画面遷移・履歴操作はしない）
+  const loadDetail = useCallback(async (id) => {
+    setDetailLoading(true)
     try {
       const { data } = await axios.get(`${apiUrl}/api/construction/projects/${id}`, authConfig())
       setDetail(data)
     } catch (e) {
       notify(e.response?.data?.error || '工事の取得に失敗しました', 'error')
-      setView('list')
     } finally {
       setDetailLoading(false)
     }
   }, [notify])
+
+  // ── ブラウザ/スマホの戻るボタン対応 ──
+  // ページ内の階層（一覧→詳細→点検表/工事写真）を History API に積み、
+  // 戻るで1段ずつ戻れるようにする。App 側はトップレベル view を別途管理しており、
+  // ここでは state.view==='construction' のサブ階層(csub)だけを扱う。
+  const detailRef = useRef(null)
+  useEffect(() => { detailRef.current = detail }, [detail])
+  const pushSub = (sub, id) => {
+    window.history.pushState({ view: 'construction', csub: sub, cid: id ?? (detailRef.current?.id ?? null) }, '')
+  }
+  useEffect(() => {
+    const onPop = (e) => {
+      const st = e.state || {}
+      if (st.view !== 'construction') return // 工事管理から出る遷移は App 側が処理
+      const sub = st.csub || 'list'
+      setView(sub)
+      if (sub === 'list') { setDetail(null); loadList() }
+      else if (st.cid && (!detailRef.current || detailRef.current.id !== st.cid)) loadDetail(st.cid)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [loadDetail, loadList])
+
+  // 詳細/点検表/工事写真へ進む（履歴を積む）
+  const openDetail = useCallback(async (id) => {
+    setView('detail'); pushSub('detail', id)
+    await loadDetail(id)
+  }, [loadDetail])
+  const goChecklist = useCallback(() => { setView('checklist'); pushSub('checklist') }, [])
+  const goPhotos = useCallback(() => { setView('photos'); pushSub('photos') }, [])
+  // 戻る（履歴を1つ戻す＝popstate 経由で view が下がる）
+  const goBack = useCallback(() => window.history.back(), [])
 
   const reloadDetail = useCallback(async () => {
     if (!detail?.id) return
@@ -181,7 +213,7 @@ export default function ConstructionPage({ onBack }) {
     try {
       await axios.delete(`${apiUrl}/api/construction/projects/${proj.id}`, authConfig())
       notify('工事を削除しました')
-      setView('list'); setDetail(null); loadList()
+      window.history.back() // 詳細→一覧へ（履歴も1つ戻す。popstateで一覧を再読込）
     } catch (e) {
       notify(e.response?.data?.error || '削除に失敗しました', 'error')
     }
@@ -273,7 +305,7 @@ export default function ConstructionPage({ onBack }) {
   if (view === 'checklist') {
     return (
       <div className="max-w-5xl mx-auto px-4 py-6">
-        <button onClick={() => setView('detail')}
+        <button onClick={goBack}
           className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
           <ArrowLeft className="w-4 h-4" /> 工事詳細へ
         </button>
@@ -309,7 +341,7 @@ export default function ConstructionPage({ onBack }) {
   if (view === 'photos') {
     return (
       <div className="max-w-5xl mx-auto px-4 py-6">
-        <button onClick={() => setView('detail')}
+        <button onClick={goBack}
           className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
           <ArrowLeft className="w-4 h-4" /> 工事詳細へ
         </button>
@@ -326,7 +358,7 @@ export default function ConstructionPage({ onBack }) {
   // ── 詳細ビュー ──
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
-      <button onClick={() => { setView('list'); setDetail(null); loadList() }}
+      <button onClick={goBack}
         className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
         <ArrowLeft className="w-4 h-4" /> 工事一覧へ
       </button>
@@ -340,8 +372,8 @@ export default function ConstructionPage({ onBack }) {
           isAdmin={isAdmin}
           onDelete={() => deleteProject(detail)}
           notify={notify}
-          onOpenChecklist={() => setView('checklist')}
-          onOpenPhotos={() => setView('photos')}
+          onOpenChecklist={goChecklist}
+          onOpenPhotos={goPhotos}
         />
       )}
 
@@ -2565,32 +2597,22 @@ async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
     const grid = gridRows.filter((r) => r && r[0])
     const frees = freeLines.filter(Boolean)
 
-    // サイズ感は参照画像に合わせる（表＝小さめ／自由記述＝大きめ）
-    const gridFont = Math.max(Math.round(W / 50), 13)
-    const freeFont = Math.max(Math.round(W / 26), 24)
+    // 文字サイズ（やや小さめ）。表＝小／自由記述＝中
+    const gridFont = Math.max(Math.round(W / 54), 12)
+    const freeFont = Math.max(Math.round(W / 36), 18)
     const padX = Math.round(gridFont * 0.6)
     const gridRowH = Math.round(gridFont * 1.7)
     const freeRowH = Math.round(freeFont * 1.4)
     const freePadY = Math.round(freeFont * 0.4)
 
-    // 表の列幅
+    // 黒板の幅は固定（内容で伸縮させない）。画像幅の 50%。
+    const boxW = Math.round(W * 0.5)
+
+    // 表のラベル列幅（ラベル文字に合わせる）／値列は残り
     ctx.font = `bold ${gridFont}px sans-serif`
     let labelW = 0
     for (const [label] of grid) labelW = Math.max(labelW, ctx.measureText(label).width)
     labelW = Math.round(labelW + padX * 2)
-    let gridValW = 0
-    for (const [, v] of grid) gridValW = Math.max(gridValW, ctx.measureText(String(v || '')).width)
-    gridValW = Math.round(gridValW + padX * 2)
-    const gridTotalW = labelW + gridValW
-
-    // 自由記述の最大幅
-    ctx.font = `bold ${freeFont}px sans-serif`
-    let freeW = 0
-    for (const t of frees) freeW = Math.max(freeW, ctx.measureText(t).width)
-    freeW = Math.round(freeW + padX * 2)
-
-    const maxTotal = Math.round(W * 0.94)
-    const boxW = Math.min(Math.max(gridTotalW, freeW), maxTotal)
     const valueW = boxW - labelW
 
     const gridH = grid.length * gridRowH
@@ -2787,15 +2809,16 @@ function PhotoBody({ detail, notify }) {
       if (opts.blackboard) {
         const node = nodes.find((n) => n.id === nodeId)
         if (node) {
-          // 上部の表＝工事名・工種、下部の大きな自由記述＝それ以外すべて（工事種別・項目・タイミング）
-          const itemText = node.photo_item && node.photo_item !== node.target
-            ? `${node.photo_item}／${node.target || ''}`
-            : (node.target || node.photo_item || '')
+          // 上部の表＝工事名・工種、下部の自由記述＝それ以外すべて（工事種別・撮影項目・撮影対象・タイミング）を各行に
           const gridRows = [
             ['工事名', detail.project_name || ''],
             ['工種', node.trade || ''],
           ]
-          const freeLines = [node.edition || '', itemText, node.timing || ''].filter(Boolean)
+          const freeLines = []
+          if (node.edition) freeLines.push(node.edition)
+          if (node.photo_item) freeLines.push(node.photo_item)
+          if (node.target && node.target !== node.photo_item) freeLines.push(node.target)
+          if (node.timing) freeLines.push(node.timing)
           toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, { gridRows, freeLines })))
         }
       }
@@ -2819,6 +2842,7 @@ function PhotoBody({ detail, notify }) {
   }
 
   const deletePhoto = async (photoId) => {
+    if (!window.confirm('この写真を削除します。よろしいですか？')) return
     try {
       await axios.delete(`${apiUrl}/api/construction/photos/${photoId}`, authConfig())
       setPhotos((prev) => prev.filter((p) => p.id !== photoId))
@@ -3175,9 +3199,9 @@ function PhotoNodeRow({
                   />
                   <button
                     onClick={(e) => { e.stopPropagation(); onDeletePhoto(photo.id) }}
-                    className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition hover:bg-danger-600"
+                    className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/70 flex items-center justify-center text-white transition hover:bg-danger-600 active:bg-danger-600"
                     title="写真を削除">
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ))}
