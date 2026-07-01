@@ -5,7 +5,7 @@ import {
   AlertTriangle, Clock, RotateCcw, ChevronRight, FolderOpen, Pencil,
   Paperclip, Trash2, Upload, ExternalLink, Gavel, Sparkles,
   BarChart3, FileSpreadsheet, ChevronDown, GitBranch, CheckCircle2, RefreshCw,
-  Camera, Circle, Link2, MinusCircle,
+  Camera, Circle, Link2, MinusCircle, FlaskConical, ClipboardCheck,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -67,6 +67,21 @@ const DC_STATUS_MAP = Object.fromEntries(DC_STATUS.map((s) => [s.key, s]))
 const DC_REASON_CATEGORIES = ['数量増減', '設計変更指示', '追加工事', '工法変更', '条件変更', 'その他']
 
 const DC_DOC_TYPES = ['変更指示書', '変更見積書', '変更契約書', '変更設計図', '変更数量書', 'その他']
+
+// 受検・試験リスト（migration 047）: 特記仕様書から抽出する検査・試験・測定
+const INSP_TEST_CATEGORIES = ['発注者検査', '化学物質濃度試験', '法定検査', 'その他試験']
+const INSP_TEST_STATUS = [
+  { key: 'planned', label: '予定', tone: 'neutral' },
+  { key: 'requested', label: '依頼済', tone: 'info' },
+  { key: 'done', label: '実施済', tone: 'info' },
+  { key: 'passed', label: '合格', tone: 'success' },
+  { key: 'failed', label: '不合格', tone: 'danger' },
+  { key: 'na', label: '対象外', tone: 'neutral' },
+]
+const INSP_TEST_STATUS_MAP = Object.fromEntries(INSP_TEST_STATUS.map((s) => [s.key, s]))
+const INSP_WITNESS_OPTIONS = ['発注者立会', '自主', '特定行政庁', '消防']
+// 完了扱い（進捗の分子）: 実施済・合格・対象外
+const INSP_TEST_DONE = ['done', 'passed', 'na']
 
 function fmtDate(d) {
   if (!d) return '—'
@@ -266,6 +281,7 @@ export default function ConstructionPage({ onBack }) {
   const goChecklist = useCallback(() => { setView('checklist'); pushSub('checklist') }, [])
   const goStorage = useCallback(() => { setView('storage'); pushSub('storage') }, [])
   const goPhotos = useCallback(() => { setView('photos'); pushSub('photos') }, [])
+  const goTests = useCallback(() => { setView('tests'); pushSub('tests') }, [])
   // 戻る（履歴を1つ戻す＝popstate 経由で view が下がる）
   const goBack = useCallback(() => window.history.back(), [])
 
@@ -466,6 +482,24 @@ export default function ConstructionPage({ onBack }) {
     )
   }
 
+  // ── 受検・試験リストビュー ──
+  if (view === 'tests') {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <button onClick={goBack}
+          className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 mb-4">
+          <ArrowLeft className="w-4 h-4" /> 工事詳細へ
+        </button>
+        {detailLoading || !detail ? (
+          <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+        ) : (
+          <InspectionTestsBody detail={detail} onReload={reloadDetail} notify={notify} />
+        )}
+        <Toast toast={toast} />
+      </div>
+    )
+  }
+
   // ── 詳細ビュー ──
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
@@ -486,6 +520,7 @@ export default function ConstructionPage({ onBack }) {
           onOpenChecklist={goChecklist}
           onOpenStorage={goStorage}
           onOpenPhotos={goPhotos}
+          onOpenTests={goTests}
         />
       )}
 
@@ -519,10 +554,12 @@ function KpiCard({ icon, label, value, tone }) {
 }
 
 // ── 詳細本体（工事メタ＋フェーズ別書類チェックリスト）──
-function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist, onOpenStorage, onOpenPhotos }) {
+function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenChecklist, onOpenStorage, onOpenPhotos, onOpenTests }) {
   const docs = detail.documents || []
   const items = detail.inspection_items || []
   const inspDone = items.filter((it) => it.status === 'done' || it.status === 'na').length
+  const tests = detail.inspection_tests || []
+  const testsDone = tests.filter((t) => INSP_TEST_DONE.includes(t.status)).length
   const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
   const [reflectBusy, setReflectBusy] = useState(false)
   const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
@@ -648,6 +685,22 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
         <div className="flex-1 min-w-0">
           <span className="text-sm font-bold text-slate-800 dark:text-slate-100">工事写真</span>
           <p className="text-xs text-slate-400 mt-0.5">撮影対象ツリー・必須写真の撮り漏れチェック</p>
+        </div>
+        <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
+      </button>
+
+      {/* 受検・試験リストは別画面へ遷移 */}
+      <button onClick={onOpenTests}
+        className="mt-2 w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-brand-50 dark:bg-brand-500/15 flex items-center justify-center shrink-0">
+          <FlaskConical className="w-5 h-5 text-brand-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-bold text-slate-800 dark:text-slate-100">受検・試験リスト</span>
+            <span className="text-xs text-slate-500 shrink-0">{testsDone}/{tests.length} 実施</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">特記仕様書から発注者検査・化学物質濃度試験などを抽出・管理</p>
         </div>
         <ChevronRight className="w-5 h-5 text-slate-300 shrink-0" />
       </button>
@@ -822,6 +875,327 @@ function InspectionRow({ item, docOptions, docName, onPatch }) {
         {docOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
       </select>
     </div>
+  )
+}
+
+// ── 受検・試験リスト（別画面・区分別アコーディオン）──
+//   特記仕様書から「発注者検査・化学物質濃度試験・法定検査・その他試験」を
+//   AI抽出→人が確認→登録し、予定日・実施日・合否を管理。成績書(保管庫)と紐づけ。
+function InspectionTestsBody({ detail, onReload, notify }) {
+  const tests = detail.inspection_tests || []
+  const docs = detail.documents || []
+  const done = tests.filter((t) => INSP_TEST_DONE.includes(t.status)).length
+  const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState(null)   // { items, used_files } or null
+  const [saving, setSaving] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => new Set())
+  const toggle = (c) => setCollapsed((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n })
+
+  // 保管庫の書類（成績書・報告書の紐づけ候補）
+  const docOptions = docs.map((d) => ({ id: d.id, label: `${folderLabel(d.folder_no)} ＞ ${d.doc_name}` }))
+  const docName = (id) => (docOptions.find((o) => o.id === id) || {}).label || '（不明な書類）'
+
+  // 表示する区分（マスタ順＋万一マスタ外があれば末尾に）
+  const cats = [...INSP_TEST_CATEGORIES, ...[...new Set(tests.map((t) => t.category))].filter((c) => !INSP_TEST_CATEGORIES.includes(c))]
+
+  // 特記仕様書をアップロード → AIが受検・試験を抽出（保存せずプレビュー）
+  const onExtract = async (e) => {
+    const files = e.target.files
+    if (!files || !files.length) return
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/extract`, fd, authConfig())
+      const items = data.items || []
+      if (!items.length) { notify('検査・試験に該当する記載が見つかりませんでした', 'error'); return }
+      setPreview({ items, used_files: data.used_files || [] })
+    } catch (err) {
+      notify(err.response?.data?.error || 'AI抽出に失敗しました', 'error')
+    } finally {
+      setBusy(false)
+      e.target.value = ''
+    }
+  }
+
+  // プレビューで選んだ項目を一括登録
+  const onConfirm = async (chosen) => {
+    setSaving(true)
+    try {
+      const payload = chosen.map((c) => ({
+        category: c.category, name: c.name, target: c.target, timing: c.timing,
+        basis: c.basis, witness: c.witness, applicable: c.applicable,
+        confidence: c.confidence, reason: c.reason,
+      }))
+      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/bulk`, { items: payload }, authConfig())
+      setPreview(null)
+      notify(`${data.inserted || 0} 件を登録しました`)
+      onReload()
+    } catch (err) {
+      notify(err.response?.data?.error || '登録に失敗しました', 'error')
+    } finally { setSaving(false) }
+  }
+
+  const patchTest = async (test, patch) => {
+    try {
+      await axios.patch(`${apiUrl}/api/construction/inspection-tests/${test.id}`, patch, authConfig())
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || '更新に失敗しました', 'error')
+    }
+  }
+  const deleteTest = async (test) => {
+    if (!window.confirm(`「${test.name}」を削除します。よろしいですか？`)) return
+    try {
+      await axios.delete(`${apiUrl}/api/construction/inspection-tests/${test.id}`, authConfig())
+      notify('削除しました')
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <h1 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <FlaskConical className="w-5 h-5 text-brand-500" /> 受検・試験リスト
+          </h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <label title="特記仕様書をアップロードすると、発注者検査・化学物質濃度試験・法定検査・その他試験をAIが抽出します（確認のうえ登録）"
+            className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            特記仕様書からAI抽出
+            <input type="file" multiple className="hidden" onChange={onExtract} disabled={busy} />
+          </label>
+          <button onClick={() => setAddOpen(true)} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" /> 手動で追加
+          </button>
+        </div>
+      </div>
+
+      <Card className="px-4 py-3 mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">実施状況（実施済・合格・対象外を完了とカウント）</span>
+          <span className="text-xs text-slate-500">{done}/{tests.length} 完了</span>
+        </div>
+        <ProgressBar done={done} total={tests.length} />
+      </Card>
+
+      {tests.length === 0 ? (
+        <Card className="text-center py-8 text-slate-500 dark:text-slate-400 text-sm">
+          まだ項目がありません。<span className="font-semibold">特記仕様書からAI抽出</span>するか、手動で追加してください。
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {cats.map((cat) => {
+            const rows = tests.filter((t) => t.category === cat)
+            if (rows.length === 0) return null
+            const catDone = rows.filter((t) => INSP_TEST_DONE.includes(t.status)).length
+            const isOpen = !collapsed.has(cat)
+            return (
+              <div key={cat} className="bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 overflow-hidden">
+                <button onClick={() => toggle(cat)}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-ink-700/50 transition">
+                  <ChevronRight className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`} />
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex-1 text-left truncate">{cat}</h3>
+                  <span className="text-xs text-slate-400 shrink-0">{catDone}/{rows.length}</span>
+                </button>
+                {isOpen && (
+                  <div className="border-t border-slate-100 dark:border-ink-700 divide-y divide-slate-100 dark:divide-ink-700">
+                    {rows.map((t) => (
+                      <TestRow key={t.id} test={t} docOptions={docOptions} docName={docName} onPatch={patchTest} onDelete={deleteTest} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {preview && (
+        <TestExtractModal
+          items={preview.items}
+          usedFiles={preview.used_files}
+          saving={saving}
+          onClose={() => setPreview(null)}
+          onConfirm={onConfirm}
+        />
+      )}
+      {addOpen && (
+        <AddTestModal
+          projectId={detail.id}
+          onClose={() => setAddOpen(false)}
+          onAdded={() => { setAddOpen(false); onReload(); notify('項目を追加しました') }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+    </div>
+  )
+}
+
+// 受検・試験の1行（状態・予定日・実施日・成績書紐づけ・結果メモ・削除）
+function TestRow({ test, docOptions, docName, onPatch, onDelete }) {
+  const na = test.applicable === false || test.status === 'na'
+  // 状態変更: 対象外(na)を選んだら applicable=false、それ以外は applicable=true に同期
+  const onStatus = (e) => {
+    const v = e.target.value
+    onPatch(test, v === 'na' ? { status: 'na', applicable: false } : { status: v, applicable: true })
+  }
+  const onLink = (e) => {
+    const v = e.target.value
+    onPatch(test, { linked_document_id: v ? Number(v) : null })
+  }
+  const selectCls = 'text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200'
+  return (
+    <div className={`px-4 py-3 ${na ? 'opacity-60' : ''}`}>
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-sm font-semibold ${na ? 'text-slate-500 line-through' : 'text-slate-800 dark:text-slate-100'}`}>{test.name}</span>
+            {test.source === 'ai' && test.ai_confidence != null && (
+              <span className="text-[11px] text-slate-400 flex items-center gap-0.5" title={test.ai_reason || ''}>
+                <Sparkles className="w-3 h-3" />AI{Math.round((test.ai_confidence || 0) * 100)}%
+              </span>
+            )}
+          </div>
+          {(test.target || test.timing || test.witness || test.basis) && (
+            <div className="text-[11px] text-slate-400 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+              {test.target && <span>対象: {test.target}</span>}
+              {test.timing && <span>時期: {test.timing}</span>}
+              {test.witness && <span>立会: {test.witness}</span>}
+              {test.basis && <span>根拠: {test.basis}</span>}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <select value={na ? 'na' : test.status} onChange={onStatus} title="状態" className={selectCls}>
+              {INSP_TEST_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+            <label className="text-[11px] text-slate-400 flex items-center gap-1">予定
+              <input type="date" value={test.scheduled_date || ''} onChange={(e) => onPatch(test, { scheduled_date: e.target.value || null })} className={selectCls} />
+            </label>
+            <label className="text-[11px] text-slate-400 flex items-center gap-1">実施
+              <input type="date" value={test.done_date || ''} onChange={(e) => onPatch(test, { done_date: e.target.value || null })} className={selectCls} />
+            </label>
+            <select value={test.linked_document_id || ''} onChange={onLink} title="成績書・報告書（保管庫）を紐づける" className={`${selectCls} max-w-[45%]`}>
+              <option value="">成績書を紐づけ…</option>
+              {docOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          {test.linked_document_id && (
+            <div className="text-[11px] text-brand-600 dark:text-brand-400 flex items-center gap-0.5 mt-1 truncate">
+              <Link2 className="w-3 h-3 shrink-0" />{docName(test.linked_document_id)}
+            </div>
+          )}
+          <input
+            placeholder="結果・所見メモ"
+            defaultValue={test.result_note || ''}
+            onBlur={(e) => { if ((e.target.value || '') !== (test.result_note || '')) onPatch(test, { result_note: e.target.value }) }}
+            className="mt-1.5 w-full text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200"
+          />
+        </div>
+        <button onClick={() => onDelete(test)} title="削除" className="shrink-0 text-slate-300 hover:text-danger-500">
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// AI抽出結果のプレビュー（登録する項目を選び、区分を直してから一括登録）
+function TestExtractModal({ items, usedFiles, saving, onClose, onConfirm }) {
+  const [rows, setRows] = useState(() => items.map((it, i) => ({ ...it, _include: true, _key: i })))
+  const toggle = (k) => setRows((rs) => rs.map((r) => (r._key === k ? { ...r, _include: !r._include } : r)))
+  const setCat = (k, v) => setRows((rs) => rs.map((r) => (r._key === k ? { ...r, category: v } : r)))
+  const chosen = rows.filter((r) => r._include)
+  const selectCls = 'text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200'
+  return (
+    <ModalShell title="特記仕様書から抽出した受検・試験" onClose={onClose} wide>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+        {rows.length} 件を読み取りました。登録する項目にチェックし、区分を必要に応じて直してから登録してください。
+        {usedFiles?.length ? <span className="block mt-0.5 text-slate-400">対象ファイル: {usedFiles.join(' / ')}</span> : null}
+      </p>
+      <div className="space-y-1 max-h-[58vh] overflow-auto -mx-2 px-2">
+        {rows.map((r) => (
+          <div key={r._key} className={`flex items-start gap-2 py-2 border-b border-slate-100 dark:border-ink-700 ${r._include ? '' : 'opacity-50'}`}>
+            <input type="checkbox" checked={r._include} onChange={() => toggle(r._key)} className="mt-1 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.name}</span>
+                {r.applicable === false && <Badge tone="neutral">対象外</Badge>}
+                {r.confidence != null && <span className="text-[11px] text-slate-400">AI{Math.round((r.confidence || 0) * 100)}%</span>}
+              </div>
+              {(r.target || r.timing || r.witness || r.basis) && (
+                <div className="text-[11px] text-slate-400 mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                  {r.target && <span>対象: {r.target}</span>}
+                  {r.timing && <span>時期: {r.timing}</span>}
+                  {r.witness && <span>立会: {r.witness}</span>}
+                  {r.basis && <span>根拠: {r.basis}</span>}
+                </div>
+              )}
+            </div>
+            <select value={r.category} onChange={(e) => setCat(r._key, e.target.value)} className={`${selectCls} shrink-0`}>
+              {INSP_TEST_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <Button variant="ghost" onClick={onClose}>キャンセル</Button>
+        <Button onClick={() => onConfirm(chosen)} disabled={saving || !chosen.length}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+          {chosen.length} 件を登録
+        </Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// 受検・試験を手動で1件追加
+function AddTestModal({ projectId, onClose, onAdded, onError }) {
+  const [f, setF] = useState({ category: '発注者検査', name: '', target: '', timing: '', witness: '', basis: '' })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }))
+  const submit = async () => {
+    if (!f.name.trim()) { onError('名称を入力してください'); return }
+    setSaving(true)
+    try {
+      await axios.post(`${apiUrl}/api/construction/projects/${projectId}/inspection-tests`, f, authConfig())
+      onAdded()
+    } catch (err) {
+      onError(err.response?.data?.error || '追加に失敗しました')
+    } finally { setSaving(false) }
+  }
+  const selectCls = 'w-full text-sm px-3 py-2 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200'
+  return (
+    <ModalShell title="受検・試験を追加" onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="区分">
+          <select value={f.category} onChange={set('category')} className={selectCls}>
+            {INSP_TEST_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="名称（必須）"><input className={inputCls} value={f.name} onChange={set('name')} placeholder="例: 中間技術検査 / 化学物質の濃度測定" /></Field>
+        <Field label="対象"><input className={inputCls} value={f.target} onChange={set('target')} placeholder="対象工程・室・材料・物質" /></Field>
+        <Field label="実施時期"><input className={inputCls} value={f.timing} onChange={set('timing')} placeholder="例: 工事完成時 / 配筋完了後" /></Field>
+        <Field label="立会区分">
+          <select value={f.witness} onChange={set('witness')} className={selectCls}>
+            <option value="">—</option>
+            {INSP_WITNESS_OPTIONS.map((w) => <option key={w} value={w}>{w}</option>)}
+          </select>
+        </Field>
+        <Field label="根拠"><input className={inputCls} value={f.basis} onChange={set('basis')} placeholder="特記の項番・標準仕様書の条番号など" /></Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="ghost" onClick={onClose}>キャンセル</Button>
+        <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}追加</Button>
+      </div>
+    </ModalShell>
   )
 }
 
