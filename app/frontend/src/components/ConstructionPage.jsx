@@ -893,6 +893,7 @@ function InspectionTestsBody({ detail, onReload, notify }) {
   const [saving, setSaving] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [collapsed, setCollapsed] = useState(() => new Set())
   const toggle = (c) => setCollapsed((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n })
 
@@ -957,6 +958,15 @@ function InspectionTestsBody({ detail, onReload, notify }) {
       notify(e.response?.data?.error || '削除に失敗しました', 'error')
     }
   }
+  const syncPhotos = async () => {
+    setSyncing(true)
+    try {
+      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/sync-photos`, {}, authConfig())
+      notify(data.inserted ? `工事写真ツリーに ${data.inserted} 件を追加しました` : '工事写真ツリーは最新です（追加はありません）')
+    } catch (e) {
+      notify(e.response?.data?.error || '工事写真への追加に失敗しました', 'error')
+    } finally { setSyncing(false) }
+  }
   const clearAll = async () => {
     if (!window.confirm(`この工事の受検・試験リスト（${tests.length}件）をすべて削除します。\n特記仕様書から抽出し直したいときに使います。\n\nよろしいですか？`)) return
     try {
@@ -987,6 +997,14 @@ function InspectionTestsBody({ detail, onReload, notify }) {
           <button onClick={() => setAddOpen(true)} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
             <Plus className="w-3.5 h-3.5" /> 手動で追加
           </button>
+          {tests.length > 0 && (
+            <button onClick={syncPhotos} disabled={syncing}
+              title="このリストの実施対象を工事写真ツリーに撮影対象として追加します（新規登録分は自動で追加されます）"
+              className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 disabled:opacity-50">
+              {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
+              工事写真ツリーへ追加
+            </button>
+          )}
           {tests.length > 0 && (
             <button onClick={clearAll} title="この工事の受検・試験を全削除（特記仕様書から抽出し直すとき用）"
               className="text-xs font-semibold text-danger-600 dark:text-danger-400 hover:underline flex items-center gap-1">
