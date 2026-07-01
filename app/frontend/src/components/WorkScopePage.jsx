@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Download, Loader2, Monitor, ShieldCheck, Upload,
-  CheckCircle2, AlertTriangle, Users, RefreshCw,
+  CheckCircle2, AlertTriangle, Users, RefreshCw, Send, Wifi, WifiOff, Activity,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -52,6 +52,11 @@ export default function WorkScopePage({ onBack }) {
   const [stats, setStats] = useState(null)
   const [statsLoading, setStatsLoading] = useState(false)
   const [consents, setConsents] = useState(null)
+  // 稼働監視・遠隔操作
+  const [status, setStatus] = useState(null)
+  const [statusLoading, setStatusLoading] = useState(false)
+  const [cmdBusy, setCmdBusy] = useState('')   // 命令送信中の device_id
+  const [cmdMsg, setCmdMsg] = useState('')
   const [file, setFile] = useState(null)
   const [version, setVersion] = useState('')
   const [notes, setNotes] = useState('')
@@ -89,6 +94,42 @@ export default function WorkScopePage({ onBack }) {
     }
   }, [])
 
+  const fetchStatus = useCallback(async () => {
+    setStatusLoading(true)
+    try {
+      const res = await axios.get(`${apiUrl}/api/admin/workscope/status`, authConfig())
+      setStatus(res.data)
+    } catch {
+      setStatus(null)
+    } finally {
+      setStatusLoading(false)
+    }
+  }, [])
+
+  const CMD_LABEL = { send: '今すぐ送信', resend_range: '期間再送', catchup: '前日補完', ping: 'Ping', resend: '再送' }
+
+  const sendCommand = async (device, cmd, args) => {
+    setCmdBusy(device.device_id)
+    setCmdMsg('')
+    try {
+      await axios.post(`${apiUrl}/api/admin/workscope/commands`,
+        { device_id: device.device_id, cmd, args: args || {} }, authConfig())
+      setCmdMsg(`${device.name || device.email}：命令「${CMD_LABEL[cmd] || cmd}」を送信しました（端末の次回巡回時に実行）`)
+    } catch {
+      setCmdMsg('命令の送信に失敗しました')
+    } finally {
+      setCmdBusy('')
+    }
+  }
+
+  const handleResendRange = (device) => {
+    const from = window.prompt('再送する開始日（YYYY-MM-DD）を入力してください', '')
+    if (!from) return
+    const to = window.prompt('再送する終了日（YYYY-MM-DD）を入力してください', from)
+    if (!to) return
+    sendCommand(device, 'resend_range', { from: from.trim(), to: to.trim() })
+  }
+
   useEffect(() => {
     fetchInfo()
     // 管理者判定（失敗時は非管理者扱い）
@@ -100,10 +141,11 @@ export default function WorkScopePage({ onBack }) {
           setIsAdmin(true)
           fetchStats()
           fetchConsents()
+          fetchStatus()
         }
       })
       .catch(() => {})
-  }, [fetchInfo, fetchStats, fetchConsents])
+  }, [fetchInfo, fetchStats, fetchConsents, fetchStatus])
 
   const handleDownload = async () => {
     setDownloading(true)
@@ -218,6 +260,122 @@ export default function WorkScopePage({ onBack }) {
             </ul>
           </div>
         </Card>
+        )}
+
+        {/* 稼働監視・遠隔操作（管理者のみ） */}
+        {isAdmin && (
+          <Card className="p-6 border-brand-200 dark:border-brand-500/30">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-brand-500" />
+                <h2 className="font-bold text-slate-900 dark:text-white">稼働監視</h2>
+              </div>
+              <button
+                onClick={fetchStatus}
+                className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${statusLoading ? 'animate-spin' : ''}`} /> 更新
+              </button>
+            </div>
+
+            {cmdMsg && (
+              <div className="mb-4 p-3 rounded-xl bg-brand-50 dark:bg-brand-500/10 border border-brand-200 dark:border-brand-500/30 text-sm text-brand-700 dark:text-brand-300">
+                {cmdMsg}
+              </div>
+            )}
+
+            {statusLoading && !status ? (
+              <p className="text-sm text-slate-400 py-4 text-center">読み込み中...</p>
+            ) : !status ? (
+              <p className="text-sm text-slate-400 py-4 text-center">状態を取得できませんでした</p>
+            ) : status.devices.length === 0 ? (
+              <p className="text-sm text-slate-400 py-4 text-center">
+                監視対象の端末がまだありません。新しいインストーラー（v2.5以降）で導入すると、ここに稼働状況が表示されます。
+              </p>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="rounded-xl bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 p-3 text-center">
+                    <p className="text-2xl font-extrabold text-slate-900 dark:text-white tabular-nums">{status.devices.length}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">監視台数</p>
+                  </div>
+                  <div className="rounded-xl bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 p-3 text-center">
+                    <p className="text-2xl font-extrabold text-success-600 dark:text-success-400 tabular-nums">{status.online_count}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">オンライン</p>
+                  </div>
+                  <div className="rounded-xl bg-white dark:bg-ink-800 border border-slate-200 dark:border-ink-700 p-3 text-center">
+                    <p className="text-2xl font-extrabold text-danger-600 dark:text-danger-400 tabular-nums">{status.alert_count}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">要確認</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {status.devices.map((d) => (
+                    <div key={d.device_id} className="rounded-xl border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800 p-4">
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            {d.online
+                              ? <Wifi className="w-4 h-4 text-success-500 shrink-0" />
+                              : <WifiOff className="w-4 h-4 text-slate-400 shrink-0" />}
+                            <span className="font-semibold text-slate-900 dark:text-white truncate">{d.name || d.email}</span>
+                            {d.version && <Badge tone="info">v{d.version}</Badge>}
+                            {!d.agent_enabled && <Badge tone="neutral">監視のみ</Badge>}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            {d.hostname || '—'}・最終接触 {d.last_seen_at ? fmtDateTime(d.last_seen_at) : 'なし'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* 指標 */}
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-300 mb-2">
+                        <span>Outlook: {d.outlook_ok == null ? '—' : d.outlook_ok ? '正常' : '⚠エラー'}</span>
+                        <span>本日 受信 {d.received_today ?? '—'} / 送信 {d.sent_today ?? '—'}</span>
+                        <span>最終データ日: {d.last_send_date || '—'}</span>
+                        <span>キーロガー: {d.keylog_ok == null ? '—' : d.keylog_ok ? '稼働' : '停止'}</span>
+                        <span>AW: {d.activity_ok == null ? '—' : d.activity_ok ? '応答' : '無応答'}</span>
+                      </div>
+
+                      {/* アラート */}
+                      {d.alerts?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {d.alerts.map((a) => (
+                            <span key={a} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-danger-50 dark:bg-danger-500/10 text-danger-700 dark:text-danger-400 text-xs">
+                              <AlertTriangle className="w-3 h-3" />{a}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 遠隔操作（エージェント導入端末のみ。監視のみ端末は不可） */}
+                      {d.agent_enabled ? (
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'send')}>
+                            {cmdBusy === d.device_id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                            今すぐ送信
+                          </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => handleResendRange(d)}>
+                            期間再送
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'ping')}>
+                            Ping
+                          </Button>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          監視のみ（自動で毎時送信）。遠隔操作は新インストーラー導入後に使えます。
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400 mt-3">
+                  ※ 命令は端末の次回巡回（既定5分間隔）で実行されます。端末の電源が入っていない場合は、起動後に実行されます。
+                </p>
+              </>
+            )}
+          </Card>
         )}
 
         {/* ダウンロード */}
