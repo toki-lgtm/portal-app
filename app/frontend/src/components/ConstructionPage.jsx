@@ -889,6 +889,7 @@ function InspectionTestsBody({ detail, onReload, notify }) {
   const [preview, setPreview] = useState(null)   // { items, used_files } or null
   const [saving, setSaving] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => new Set())
   const toggle = (c) => setCollapsed((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n })
 
@@ -899,15 +900,13 @@ function InspectionTestsBody({ detail, onReload, notify }) {
   // 表示する区分（マスタ順＋万一マスタ外があれば末尾に）
   const cats = [...INSP_TEST_CATEGORIES, ...[...new Set(tests.map((t) => t.category))].filter((c) => !INSP_TEST_CATEGORIES.includes(c))]
 
-  // 特記仕様書をアップロード → AIが受検・試験を抽出（保存せずプレビュー）
-  const onExtract = async (e) => {
-    const files = e.target.files
-    if (!files || !files.length) return
+  // 保管庫(書類整理)の保存済みファイルを選んで → AIが受検・試験を抽出（保存せずプレビュー）
+  const onExtractStored = async (fileIds) => {
+    if (!fileIds?.length) return
+    setPickerOpen(false)
     setBusy(true)
     try {
-      const fd = new FormData()
-      for (const file of files) fd.append('files', file)
-      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/extract`, fd, authConfig())
+      const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/extract-stored`, { file_ids: fileIds }, authConfig())
       const items = data.items || []
       if (!items.length) { notify('検査・試験に該当する記載が見つかりませんでした', 'error'); return }
       setPreview({ items, used_files: data.used_files || [] })
@@ -915,7 +914,6 @@ function InspectionTestsBody({ detail, onReload, notify }) {
       notify(err.response?.data?.error || 'AI抽出に失敗しました', 'error')
     } finally {
       setBusy(false)
-      e.target.value = ''
     }
   }
 
@@ -966,12 +964,12 @@ function InspectionTestsBody({ detail, onReload, notify }) {
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 truncate">{detail.project_name}</p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <label title="特記仕様書をアップロードすると、発注者検査・化学物質濃度試験・法定検査・その他試験をAIが抽出します（確認のうえ登録）"
-            className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
+          <button onClick={() => setPickerOpen(true)} disabled={busy}
+            title="保管庫(書類整理)に保存済みの特記仕様書を選ぶと、発注者検査・化学物質濃度試験・法定検査・その他試験をAIが抽出します（確認のうえ登録）"
+            className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 disabled:opacity-50">
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             特記仕様書からAI抽出
-            <input type="file" multiple className="hidden" onChange={onExtract} disabled={busy} />
-          </label>
+          </button>
           <button onClick={() => setAddOpen(true)} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
             <Plus className="w-3.5 h-3.5" /> 手動で追加
           </button>
@@ -1018,6 +1016,13 @@ function InspectionTestsBody({ detail, onReload, notify }) {
         </div>
       )}
 
+      {pickerOpen && (
+        <SpecPickerModal
+          documents={docs}
+          onClose={() => setPickerOpen(false)}
+          onPick={onExtractStored}
+        />
+      )}
       {preview && (
         <TestExtractModal
           items={preview.items}
@@ -1104,6 +1109,58 @@ function TestRow({ test, docOptions, docName, onPatch, onDelete }) {
         </button>
       </div>
     </div>
+  )
+}
+
+// 保管庫(書類整理)の保存済みファイルから、AI抽出の対象（特記仕様書）を選ぶ
+function SpecPickerModal({ documents, onClose, onPick }) {
+  // 保管庫の全ファイルをフラット化（PDF/画像のみ。特記仕様書らしいものを上に）
+  const all = []
+  for (const d of documents || []) {
+    for (const f of (d.files || [])) {
+      const mt = f.mime_type || ''
+      const isDoc = mt === 'application/pdf' || mt.startsWith('image/') || /\.(pdf|png|jpe?g|gif|webp)$/i.test(f.file_name || '')
+      if (!isDoc) continue
+      const likely = d.folder_no === 1 || /特記|仕様/.test(`${d.doc_name || ''}${f.file_name || ''}`)
+      all.push({ id: f.id, fileName: f.file_name, folderNo: d.folder_no, docName: d.doc_name, likely })
+    }
+  }
+  all.sort((a, b) => (b.likely - a.likely))
+  const [sel, setSel] = useState(() => new Set(all.filter((x) => x.likely).map((x) => x.id)))
+  const toggle = (id) => setSel((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+  return (
+    <ModalShell title="特記仕様書を選択（保管庫から）" onClose={onClose} wide>
+      {all.length === 0 ? (
+        <p className="text-sm text-slate-500 dark:text-slate-400 py-4">
+          保管庫（書類整理）に読み取れるファイル（PDF/画像）がありません。<br />
+          先に <span className="font-semibold">書類整理（保管庫）</span> へ特記仕様書を保存してから、ここで選んでください。
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            保管庫の保存済みファイルから、読み取る特記仕様書を選んでください。「設計図書」フォルダや「特記／仕様」を含むファイルは初期選択済みです（複数選択可）。
+          </p>
+          <div className="space-y-1 max-h-[55vh] overflow-auto -mx-2 px-2">
+            {all.map((f) => (
+              <label key={f.id} className={`flex items-center gap-2 py-2 border-b border-slate-100 dark:border-ink-700 cursor-pointer ${sel.has(f.id) ? '' : 'opacity-60'}`}>
+                <input type="checkbox" checked={sel.has(f.id)} onChange={() => toggle(f.id)} className="shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-slate-800 dark:text-slate-100 truncate">{f.fileName}</div>
+                  <div className="text-[11px] text-slate-400 truncate">{folderLabel(f.folderNo)} ＞ {f.docName}</div>
+                </div>
+                {f.likely && <Badge tone="info">特記候補</Badge>}
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={onClose}>キャンセル</Button>
+            <Button onClick={() => onPick([...sel])} disabled={!sel.size}>
+              <Sparkles className="w-4 h-4" />{sel.size} 件で抽出
+            </Button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   )
 }
 
