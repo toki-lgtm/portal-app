@@ -953,6 +953,16 @@ function InspectionTestsBody({ detail, onReload, notify }) {
       notify(e.response?.data?.error || '削除に失敗しました', 'error')
     }
   }
+  const clearAll = async () => {
+    if (!window.confirm(`この工事の受検・試験リスト（${tests.length}件）をすべて削除します。\n特記仕様書から抽出し直したいときに使います。\n\nよろしいですか？`)) return
+    try {
+      const { data } = await axios.delete(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests`, authConfig())
+      notify(`${data.deleted || 0} 件を削除しました`)
+      onReload()
+    } catch (e) {
+      notify(e.response?.data?.error || '全消去に失敗しました', 'error')
+    }
+  }
 
   return (
     <div>
@@ -973,6 +983,12 @@ function InspectionTestsBody({ detail, onReload, notify }) {
           <button onClick={() => setAddOpen(true)} className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1">
             <Plus className="w-3.5 h-3.5" /> 手動で追加
           </button>
+          {tests.length > 0 && (
+            <button onClick={clearAll} title="この工事の受検・試験を全削除（特記仕様書から抽出し直すとき用）"
+              className="text-xs font-semibold text-danger-600 dark:text-danger-400 hover:underline flex items-center gap-1">
+              <Trash2 className="w-3.5 h-3.5" /> 全消去
+            </button>
+          )}
         </div>
       </div>
 
