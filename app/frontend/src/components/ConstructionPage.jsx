@@ -1016,6 +1016,18 @@ function InspectionTestsBody({ detail, onReload, notify }) {
         </div>
       )}
 
+      {busy && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white dark:bg-ink-800 rounded-2xl shadow-xl border border-slate-200 dark:border-ink-700 px-8 py-7 max-w-sm w-full text-center">
+            <Loader2 className="w-8 h-8 animate-spin text-brand-500 mx-auto mb-3" />
+            <div className="text-sm font-bold text-slate-800 dark:text-slate-100">AIが特記仕様書を読み取っています…</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+              発注者検査・化学物質濃度試験・法定検査などを抽出しています。<br />
+              ページ数によっては1分ほどかかります。このままお待ちください。
+            </div>
+          </div>
+        </div>
+      )}
       {pickerOpen && (
         <SpecPickerModal
           documents={docs}
