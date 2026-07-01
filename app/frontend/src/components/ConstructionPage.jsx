@@ -80,8 +80,10 @@ const INSP_TEST_STATUS = [
 ]
 const INSP_TEST_STATUS_MAP = Object.fromEntries(INSP_TEST_STATUS.map((s) => [s.key, s]))
 const INSP_WITNESS_OPTIONS = ['発注者立会', '自主', '特定行政庁', '消防']
-// 完了扱い（進捗の分子）: 実施済・合格・対象外
-const INSP_TEST_DONE = ['done', 'passed', 'na']
+// 完了扱い（進捗の分子）: 実施済・合格
+const INSP_TEST_DONE = ['done', 'passed']
+// 一覧に表示するステータス（対象外=na は表示しない）
+const INSP_TEST_VISIBLE_STATUS = INSP_TEST_STATUS.filter((s) => s.key !== 'na')
 
 function fmtDate(d) {
   if (!d) return '—'
@@ -558,7 +560,7 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
   const docs = detail.documents || []
   const items = detail.inspection_items || []
   const inspDone = items.filter((it) => it.status === 'done' || it.status === 'na').length
-  const tests = detail.inspection_tests || []
+  const tests = (detail.inspection_tests || []).filter((t) => t.status !== 'na')
   const testsDone = tests.filter((t) => INSP_TEST_DONE.includes(t.status)).length
   const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
   const [reflectBusy, setReflectBusy] = useState(false)
@@ -882,7 +884,8 @@ function InspectionRow({ item, docOptions, docName, onPatch }) {
 //   特記仕様書から「発注者検査・化学物質濃度試験・法定検査・その他試験」を
 //   AI抽出→人が確認→登録し、予定日・実施日・合否を管理。成績書(保管庫)と紐づけ。
 function InspectionTestsBody({ detail, onReload, notify }) {
-  const tests = detail.inspection_tests || []
+  // 対象外(na)は表示しない。実施対象の項目だけを扱う。
+  const tests = (detail.inspection_tests || []).filter((t) => t.status !== 'na')
   const docs = detail.documents || []
   const done = tests.filter((t) => INSP_TEST_DONE.includes(t.status)).length
   const [busy, setBusy] = useState(false)
@@ -907,8 +910,9 @@ function InspectionTestsBody({ detail, onReload, notify }) {
     setBusy(true)
     try {
       const { data } = await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/inspection-tests/extract-stored`, { file_ids: fileIds }, authConfig())
-      const items = data.items || []
-      if (!items.length) { notify('検査・試験に該当する記載が見つかりませんでした', 'error'); return }
+      // 対象外（実施しない）は表示・登録しない。実施対象のみをプレビューに出す。
+      const items = (data.items || []).filter((it) => it.applicable !== false)
+      if (!items.length) { notify('実施対象の検査・試験は見つかりませんでした', 'error'); return }
       setPreview({ items, used_files: data.used_files || [] })
     } catch (err) {
       notify(err.response?.data?.error || 'AI抽出に失敗しました', 'error')
@@ -994,7 +998,7 @@ function InspectionTestsBody({ detail, onReload, notify }) {
 
       <Card className="px-4 py-3 mb-4">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">実施状況（実施済・合格・対象外を完了とカウント）</span>
+          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">実施状況（実施済・合格を完了とカウント）</span>
           <span className="text-xs text-slate-500">{done}/{tests.length} 完了</span>
         </div>
         <ProgressBar done={done} total={tests.length} />
@@ -1074,23 +1078,18 @@ function InspectionTestsBody({ detail, onReload, notify }) {
 
 // 受検・試験の1行（状態・予定日・実施日・成績書紐づけ・結果メモ・削除）
 function TestRow({ test, docOptions, docName, onPatch, onDelete }) {
-  const na = test.applicable === false || test.status === 'na'
-  // 状態変更: 対象外(na)を選んだら applicable=false、それ以外は applicable=true に同期
-  const onStatus = (e) => {
-    const v = e.target.value
-    onPatch(test, v === 'na' ? { status: 'na', applicable: false } : { status: v, applicable: true })
-  }
+  const onStatus = (e) => onPatch(test, { status: e.target.value })
   const onLink = (e) => {
     const v = e.target.value
     onPatch(test, { linked_document_id: v ? Number(v) : null })
   }
   const selectCls = 'text-xs px-2 py-1 rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-700 text-slate-700 dark:text-slate-200'
   return (
-    <div className={`px-4 py-3 ${na ? 'opacity-60' : ''}`}>
+    <div className="px-4 py-3">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`text-sm font-semibold ${na ? 'text-slate-500 line-through' : 'text-slate-800 dark:text-slate-100'}`}>{test.name}</span>
+            <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">{test.name}</span>
             {test.source === 'ai' && test.ai_confidence != null && (
               <span className="text-[11px] text-slate-400 flex items-center gap-0.5" title={test.ai_reason || ''}>
                 <Sparkles className="w-3 h-3" />AI{Math.round((test.ai_confidence || 0) * 100)}%
@@ -1106,8 +1105,8 @@ function TestRow({ test, docOptions, docName, onPatch, onDelete }) {
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2 mt-2">
-            <select value={na ? 'na' : test.status} onChange={onStatus} title="状態" className={selectCls}>
-              {INSP_TEST_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+            <select value={test.status} onChange={onStatus} title="状態" className={selectCls}>
+              {INSP_TEST_VISIBLE_STATUS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
             <label className="text-[11px] text-slate-400 flex items-center gap-1">予定
               <input type="date" value={test.scheduled_date || ''} onChange={(e) => onPatch(test, { scheduled_date: e.target.value || null })} className={selectCls} />
