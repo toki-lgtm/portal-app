@@ -23,6 +23,7 @@ import {
   FolderOpen,
   BookOpen,
   ChevronDown,
+  CalendarDays,
 } from 'lucide-react'
 import Button from './components/ui/Button'
 import Badge from './components/ui/Badge'
@@ -42,7 +43,7 @@ import BusinessCardsPage from './components/BusinessCardsPage'
 import ExamPage from './components/ExamPage'
 import ManualPage from './components/ManualPage'
 import QuoteComparePage from './components/QuoteComparePage'
-import CalendarPage from './components/CalendarPage'
+import CalendarPage, { MonthGrid, KIND_META } from './components/CalendarPage'
 import { applyTheme, loadTheme } from './lib/theme'
 import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
@@ -694,6 +695,69 @@ function BidsKpiSection({ bidStats, onOpen }) {
 }
 
 /**
+ * ダッシュボードの今月カレンダーカード。
+ * 会社カレンダー（公休日・計画有給）の当月分をミニ表示する。
+ * APIが失敗しても表示が崩れないようtry/catchでフォールバック。
+ */
+function CalendarCard({ onOpenCalendar }) {
+  const [holidays, setHolidays] = useState({})
+  const [loading, setLoading] = useState(true)
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+
+  useEffect(() => {
+    const token = localStorage.getItem('authToken')
+    // 当月の初日〜末日だけ取得（軽量）
+    const from = `${year}-${String(month).padStart(2, '0')}-01`
+    const to = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`
+    fetch(`${apiUrl}/api/calendar/holidays?from=${from}&to=${to}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data) => {
+        const map = {}
+        for (const h of data || []) map[h.day] = { kind: h.kind, note: h.note }
+        setHolidays(map)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [year, month])
+
+  return (
+    <Card className="p-6 h-full">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <CalendarDays className="w-5 h-5 text-brand-500" />
+          <h2 className="font-bold text-slate-900 dark:text-white">今月のカレンダー</h2>
+        </div>
+        <button
+          onClick={onOpenCalendar}
+          className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+        >
+          1年分を見る <ArrowRight className="w-3 h-3" />
+        </button>
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-400 py-4 text-center">読み込み中...</p>
+      ) : (
+        <>
+          <MonthGrid year={year} month={month} holidays={holidays} compact />
+          <div className="flex items-center gap-3 mt-3 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1">
+              <span className={`w-2.5 h-2.5 rounded-sm ${KIND_META.koushu.dot}`} />公休日
+            </span>
+            <span className="flex items-center gap-1">
+              <span className={`w-2.5 h-2.5 rounded-sm ${KIND_META.yukyu.dot}`} />計画有給
+            </span>
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+/**
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
@@ -922,6 +986,11 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
                 {/* 文書回覧（常設） */}
                 <div>
                   <DocumentsCard onOpenDocuments={() => onOpenInternal?.('documents')} />
+                </div>
+
+                {/* 今月のカレンダー（常設） */}
+                <div>
+                  <CalendarCard onOpenCalendar={() => onOpenInternal?.('calendar')} />
                 </div>
 
                 {/* 最近の点検（show_kpi && statsが取得できた場合のみ） */}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import {
-  ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Loader2, Trash2,
+  ArrowLeft, CalendarDays, Loader2, Trash2,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -12,7 +12,7 @@ import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
 // 種別 → 表示メタ（塗り色・ラベル）。公休日=ピンク / 計画有給=オレンジ。
-const KIND_META = {
+export const KIND_META = {
   koushu: {
     label: '公休日',
     cell: 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-200',
@@ -29,8 +29,96 @@ const WEEK = ['月', '火', '水', '木', '金', '土', '日'] // 月曜始ま�
 const MONTH_LABELS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
 // ローカルタイムで 'YYYY-MM-DD' を作る（toISOString だと UTC ずれで前日になる）
-function ymd(y, m /*1-12*/, d) {
+export function ymd(y, m /*1-12*/, d) {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+/**
+ * 1か月分のカレンダーグリッド（再利用部品）。
+ * props: year, month(1-12), holidays({'YYYY-MM-DD':{kind}}), onDayClick?(key),
+ *        compact(小型表示・ダッシュボード用), highlightToday(当日枠)
+ */
+export function MonthGrid({ year, month, holidays = {}, onDayClick, compact = false, highlightToday = true }) {
+  const today = new Date()
+  const cells = useMemo(() => {
+    const first = new Date(year, month - 1, 1)
+    const lead = (first.getDay() + 6) % 7 // 月曜始まりでの先頭空白（0=月 .. 6=日）
+    const daysInMonth = new Date(year, month, 0).getDate()
+    const arr = []
+    for (let i = 0; i < lead; i++) arr.push(null)
+    for (let d = 1; d <= daysInMonth; d++) arr.push(d)
+    while (arr.length % 7 !== 0) arr.push(null)
+    return arr
+  }, [year, month])
+
+  const stats = useMemo(() => {
+    let k = 0, y = 0
+    const dim = new Date(year, month, 0).getDate()
+    for (let d = 1; d <= dim; d++) {
+      const h = holidays[ymd(year, month, d)]
+      if (h?.kind === 'koushu') k++
+      else if (h?.kind === 'yukyu') y++
+    }
+    return { koushu: k, yukyu: y }
+  }, [holidays, year, month])
+
+  const isToday = (d) =>
+    d && year === today.getFullYear() && month === today.getMonth() + 1 && d === today.getDate()
+
+  const cellSize = compact
+    ? 'text-[11px]'
+    : 'text-sm sm:text-base'
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className={`font-bold text-slate-900 dark:text-white ${compact ? 'text-sm' : 'text-base'}`}>
+          {year}年 {MONTH_LABELS[month - 1]}
+        </h3>
+        <div className="flex items-center gap-1.5">
+          <Badge tone="danger">公休 {stats.koushu}</Badge>
+          {stats.yukyu > 0 && <Badge tone="warning">有給 {stats.yukyu}</Badge>}
+        </div>
+      </div>
+      <div className={`grid grid-cols-7 ${compact ? 'gap-0.5' : 'gap-1'}`}>
+        {WEEK.map((w, i) => (
+          <div
+            key={w}
+            className={`text-center font-bold py-0.5 text-[10px] ${
+              i === 5 ? 'text-blue-500' : i === 6 ? 'text-rose-500' : 'text-slate-400'
+            }`}
+          >
+            {w}
+          </div>
+        ))}
+        {cells.map((d, idx) => {
+          if (d === null) return <div key={`e${idx}`} />
+          const key = ymd(year, month, d)
+          const h = holidays[key]
+          const dow = idx % 7 // 0=月 .. 6=日
+          const meta = h ? KIND_META[h.kind] : null
+          const tone = meta
+            ? meta.cell
+            : dow === 6
+            ? 'text-rose-500'
+            : dow === 5
+            ? 'text-blue-500'
+            : 'text-slate-700 dark:text-slate-200'
+          const ring = highlightToday && isToday(d) ? 'ring-2 ring-brand-500' : ''
+          const clickable = onDayClick ? 'cursor-pointer hover:opacity-80' : ''
+          return (
+            <div
+              key={key}
+              className={`relative aspect-square rounded-md flex items-center justify-center font-semibold transition select-none ${cellSize} ${tone} ${ring} ${clickable}`}
+              onClick={onDayClick ? () => onDayClick(key) : undefined}
+            >
+              {d}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function CalendarPage({ onBack }) {
@@ -39,13 +127,19 @@ export default function CalendarPage({ onBack }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const { toast, showToast } = useToast()
 
-  // 表示中の年月。既定は今日の月。
-  const today = new Date()
-  const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth() + 1) // 1-12
-
   // 管理者が編集する対象日（クリックで開くアクションモーダル）
   const [editDay, setEditDay] = useState(null) // 'YYYY-MM-DD' | null
+
+  // 現在の月から12か月分（[{year, month}]）
+  const months = useMemo(() => {
+    const now = new Date()
+    const list = []
+    for (let i = 0; i < 12; i++) {
+      const dt = new Date(now.getFullYear(), now.getMonth() + i, 1)
+      list.push({ year: dt.getFullYear(), month: dt.getMonth() + 1 })
+    }
+    return list
+  }, [])
 
   const loadHolidays = useCallback(async () => {
     try {
@@ -68,42 +162,6 @@ export default function CalendarPage({ onBack }) {
       .then((res) => setIsAdmin(res.data?.role === 'admin'))
       .catch(() => setIsAdmin(false))
   }, [loadHolidays])
-
-  // 表示月のセル配列を作る（先頭の空白 + 各日）
-  const cells = useMemo(() => {
-    const first = new Date(year, month - 1, 1)
-    const lead = (first.getDay() + 6) % 7 // 月曜始まりでの先頭空白数（0=月 .. 6=日）
-    const daysInMonth = new Date(year, month, 0).getDate()
-    const arr = []
-    for (let i = 0; i < lead; i++) arr.push(null)
-    for (let d = 1; d <= daysInMonth; d++) arr.push(d)
-    while (arr.length % 7 !== 0) arr.push(null)
-    return arr
-  }, [year, month])
-
-  // 表示月の集計
-  const monthStats = useMemo(() => {
-    let k = 0, y = 0
-    const daysInMonth = new Date(year, month, 0).getDate()
-    for (let d = 1; d <= daysInMonth; d++) {
-      const h = holidays[ymd(year, month, d)]
-      if (h?.kind === 'koushu') k++
-      else if (h?.kind === 'yukyu') y++
-    }
-    return { koushu: k, yukyu: y }
-  }, [holidays, year, month])
-
-  const gotoMonth = (delta) => {
-    let m = month + delta
-    let y = year
-    if (m < 1) { m = 12; y-- }
-    if (m > 12) { m = 1; y++ }
-    setYear(y)
-    setMonth(m)
-  }
-
-  const isToday = (d) =>
-    d && year === today.getFullYear() && month === today.getMonth() + 1 && d === today.getDate()
 
   // 管理者操作：日付に種別を設定 / 解除
   const setKind = async (day, kind) => {
@@ -137,7 +195,7 @@ export default function CalendarPage({ onBack }) {
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
       {/* ヘッダー */}
       <header className="bg-white/80 dark:bg-ink-900/80 backdrop-blur border-b border-slate-200 dark:border-ink-800 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-4">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft className="w-4 h-4" />
             戻る
@@ -146,12 +204,20 @@ export default function CalendarPage({ onBack }) {
             <CalendarDays className="w-5 h-5 text-brand-500" />
             <h1 className="text-lg font-bold text-slate-900 dark:text-white">会社カレンダー</h1>
           </div>
+          <div className="ml-auto hidden sm:flex items-center gap-4 text-sm text-slate-600 dark:text-slate-300">
+            <span className="flex items-center gap-1.5">
+              <span className={`w-3 h-3 rounded-sm ${KIND_META.koushu.dot}`} />公休日
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className={`w-3 h-3 rounded-sm ${KIND_META.yukyu.dot}`} />計画有給
+            </span>
+          </div>
         </div>
       </header>
 
       {toast && <Toast toast={toast} />}
 
-      <main className="max-w-4xl mx-auto px-6 py-8">
+      <main className="max-w-6xl mx-auto px-6 py-8">
         {loading ? (
           <div className="text-center py-20">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" />
@@ -159,88 +225,22 @@ export default function CalendarPage({ onBack }) {
           </div>
         ) : (
           <>
-            {/* 月ナビゲーション */}
-            <div className="flex items-center justify-between mb-4">
-              <button
-                onClick={() => gotoMonth(-1)}
-                aria-label="前の月"
-                className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-ink-800 transition"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <div className="text-center">
-                <div className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">
-                  {year}年 {MONTH_LABELS[month - 1]}
-                </div>
-                <div className="flex items-center justify-center gap-2 mt-1">
-                  <Badge tone="danger">公休 {monthStats.koushu}日</Badge>
-                  {monthStats.yukyu > 0 && <Badge tone="warning">計画有給 {monthStats.yukyu}日</Badge>}
-                </div>
-              </div>
-              <button
-                onClick={() => gotoMonth(1)}
-                aria-label="次の月"
-                className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-ink-800 transition"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+              現在の月から1年分を表示しています。{isAdmin && '日付をタップすると公休日／計画有給を編集できます。'}
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {months.map(({ year, month }) => (
+                <Card key={`${year}-${month}`} className="p-4">
+                  <MonthGrid
+                    year={year}
+                    month={month}
+                    holidays={holidays}
+                    onDayClick={isAdmin ? setEditDay : undefined}
+                  />
+                </Card>
+              ))}
             </div>
-
-            {/* 凡例 */}
-            <div className="flex items-center justify-center gap-4 mb-4 text-sm text-slate-600 dark:text-slate-300">
-              <span className="flex items-center gap-1.5">
-                <span className={`w-3 h-3 rounded-sm ${KIND_META.koushu.dot}`} />公休日
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className={`w-3 h-3 rounded-sm ${KIND_META.yukyu.dot}`} />計画有給
-              </span>
-              {isAdmin && <span className="text-xs text-slate-400">（日付をタップで編集）</span>}
-            </div>
-
-            {/* カレンダー本体 */}
-            <Card className="p-4 sm:p-6">
-              <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                {WEEK.map((w, i) => (
-                  <div
-                    key={w}
-                    className={`text-center text-xs font-bold py-1 ${
-                      i === 5 ? 'text-blue-500' : i === 6 ? 'text-rose-500' : 'text-slate-400'
-                    }`}
-                  >
-                    {w}
-                  </div>
-                ))}
-                {cells.map((d, idx) => {
-                  if (d === null) return <div key={`e${idx}`} />
-                  const key = ymd(year, month, d)
-                  const h = holidays[key]
-                  const dow = idx % 7 // 0=月 .. 6=日
-                  const meta = h ? KIND_META[h.kind] : null
-                  const base =
-                    'relative aspect-square rounded-lg flex items-center justify-center text-sm sm:text-base font-semibold transition select-none'
-                  const tone = meta
-                    ? meta.cell
-                    : dow === 6
-                    ? 'text-rose-500'
-                    : dow === 5
-                    ? 'text-blue-500'
-                    : 'text-slate-700 dark:text-slate-200'
-                  const ring = isToday(d) ? 'ring-2 ring-brand-500' : ''
-                  const clickable = isAdmin ? 'cursor-pointer hover:opacity-80' : ''
-                  return (
-                    <div
-                      key={key}
-                      className={`${base} ${tone} ${ring} ${clickable}`}
-                      onClick={isAdmin ? () => setEditDay(key) : undefined}
-                    >
-                      {d}
-                    </div>
-                  )
-                })}
-              </div>
-            </Card>
-
-            <p className="text-xs text-slate-400 dark:text-slate-500 mt-4 text-center">
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-6 text-center">
               出典: 主税さん作成「計画有給休暇一覧」（2026.7〜2027.6 確定）。祝日・振替は公休日に含みます。
             </p>
           </>
