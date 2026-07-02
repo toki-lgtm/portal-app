@@ -42,6 +42,7 @@ import BusinessCardsPage from './components/BusinessCardsPage'
 import ExamPage from './components/ExamPage'
 import ManualPage from './components/ManualPage'
 import QuoteComparePage from './components/QuoteComparePage'
+import CalendarPage from './components/CalendarPage'
 import { applyTheme, loadTheme } from './lib/theme'
 import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
@@ -1196,6 +1197,8 @@ function AppContent() {
     page = <ExamPage onBack={() => setView('dashboard')} />
   } else if (view === 'manual') {
     page = <ManualPage onBack={() => setView('dashboard')} />
+  } else if (view === 'calendar') {
+    page = <CalendarPage onBack={() => setView('dashboard')} />
   } else {
     page = (
       <DashboardPage
