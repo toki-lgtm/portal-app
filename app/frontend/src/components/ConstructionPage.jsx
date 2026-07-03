@@ -1681,6 +1681,17 @@ function SekoPlanSection({ detail, notify }) {
     } finally { setDlId(null) }
   }
 
+  const onDelete = async (plan) => {
+    if (!window.confirm(`「${plan.title || plan.output_name}」を削除しますか？\n\n生成した施工計画書と、共有ドライブ上のファイルも削除されます。`)) return
+    try {
+      await axios.delete(`${apiUrl}/api/construction/seko-plans/${plan.id}`, authConfig())
+      notify('削除しました')
+      await load()
+    } catch (err) {
+      notify(err.response?.data?.error || '削除に失敗しました', 'error')
+    }
+  }
+
   return (
     <Card className="px-4 py-3 mb-4">
       <div className="flex items-center justify-between gap-3 mb-2">
@@ -1739,6 +1750,10 @@ function SekoPlanSection({ detail, notify }) {
                       DL
                     </Button>
                   )}
+                  <button onClick={() => onDelete(p)} title="削除"
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-danger-600 hover:bg-danger-50 dark:hover:bg-danger-500/15 shrink-0">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </li>
               ))}
             </ul>
