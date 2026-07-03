@@ -90,6 +90,12 @@ function fmtDate(d) {
   const dt = new Date(d)
   return `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()}`
 }
+function fmtDateTime(d) {
+  if (!d) return '—'
+  const dt = new Date(d)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()} ${p(dt.getHours())}:${p(dt.getMinutes())}`
+}
 function fmtYen(n) {
   if (n == null) return '—'
   return `¥${Math.round(n).toLocaleString('ja-JP')}`
@@ -648,6 +654,8 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
       <BoqSection detail={detail} notify={notify} onReload={onReload} />
 
       <DesignChangeSection detail={detail} notify={notify} onReload={onReload} />
+
+      <SekoPlanSection detail={detail} notify={notify} />
 
       {/* 書類整理（保管庫）は別画面へ遷移 */}
       <button onClick={onOpenStorage}
@@ -1580,6 +1588,167 @@ function BoqTreeView({ rows }) {
 }
 
 // ── 数量内訳・構成比率セクション ──
+// 施工計画書の工種（テンプレ名 工種別_<key>_… / 自主検査CL_<key>_… の <key> に一致）
+const SEKO_KOSHU = [
+  '01_直接仮設工事', '02_土工事', '03_地業工事', '04_鉄筋工事', '05_コンクリート工事',
+  '06_型枠工事', '07_既製コンクリート工事', '08_防水工事', '09_石工事', '10_タイル工事',
+  '11_屋根及びとい工事', '12_金属工事', '13_左官工事', '14_建具工事', '15_塗装工事',
+  '16_内外装工事', '17_ユニット及びその他工事',
+]
+const SEKO_PLAN_TYPES = [
+  { key: 'soukatsu', label: '総合施工計画書' },
+  { key: 'koshu', label: '工種別施工計画書' },
+  { key: 'checklist', label: '自主検査チェックリスト' },
+]
+const SEKO_STATUS_TONE = { queued: 'warning', processing: 'warning', done: 'success', error: 'danger' }
+const SEKO_STATUS_LABEL = { queued: '待機中', processing: '生成中', done: '完了', error: 'エラー' }
+
+// ── 施工計画書 生成（ハイブリッド: ジョブ投入→常駐エージェント生成→回収DL）──
+//   工事マスタ（契約情報・体制）から Word を自動生成。総合／工種別／自主検査CL に対応。
+function SekoPlanSection({ detail, notify }) {
+  const [open, toggleOpen] = useSectionCollapse('seko_plan', true)
+  const [plans, setPlans] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [planType, setPlanType] = useState('soukatsu')
+  const [koshu, setKoshu] = useState(SEKO_KOSHU[3]) // 既定=鉄筋
+  const [busy, setBusy] = useState(false)
+  const [dlId, setDlId] = useState(null)
+  const pollRef = useRef(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/construction/projects/${detail.id}/seko-plans`, authConfig())
+      setPlans(data.plans || [])
+    } catch { /* noop */ } finally { setLoading(false) }
+  }, [detail.id])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // 生成中ジョブがある間、状態をポーリングして一覧を更新
+  const startPolling = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    let ticks = 0
+    pollRef.current = setInterval(async () => {
+      ticks += 1
+      const pending = plans.filter((p) => p.status === 'queued' || p.status === 'processing')
+      try {
+        const results = await Promise.all(
+          pending.map((p) => axios.get(`${apiUrl}/api/construction/seko-plans/${p.id}/status`, authConfig()).then((r) => r.data).catch(() => null)),
+        )
+        if (results.some((r) => r && (r.ready || r.status === 'error')) || ticks > 75) {
+          await load()
+        }
+      } catch { /* noop */ }
+    }, 4000)
+  }, [plans, load])
+
+  useEffect(() => {
+    const hasPending = plans.some((p) => p.status === 'queued' || p.status === 'processing')
+    if (hasPending) startPolling()
+    else if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    return () => { if (pollRef.current && !hasPending) { clearInterval(pollRef.current); pollRef.current = null } }
+  }, [plans, startPolling])
+
+  const onGenerate = async () => {
+    setBusy(true)
+    try {
+      const body = { plan_type: planType }
+      if (planType !== 'soukatsu') body.koshu = koshu
+      await axios.post(`${apiUrl}/api/construction/projects/${detail.id}/seko-plans`, body, authConfig())
+      notify('生成ジョブを投入しました。エージェントが生成すると完了します')
+      await load()
+    } catch (err) {
+      notify(err.response?.data?.error || '生成ジョブの投入に失敗しました', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const onDownload = async (plan) => {
+    setDlId(plan.id)
+    try {
+      const token = localStorage.getItem('authToken')
+      const resp = await axios.get(`${apiUrl}/api/construction/seko-plans/${plan.id}/download`,
+        { headers: { Authorization: `Bearer ${token}` }, responseType: 'blob' })
+      const url = URL.createObjectURL(resp.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = plan.output_name || '施工計画書.docx'
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      notify(err.response?.data?.error || 'ダウンロードに失敗しました', 'error')
+    } finally { setDlId(null) }
+  }
+
+  return (
+    <Card className="px-4 py-3 mb-4">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 min-w-0">
+          <SectionChevron open={open} onClick={toggleOpen} />
+          <button type="button" onClick={toggleOpen} className="flex items-center gap-1.5 truncate text-left">
+            <Sparkles className="w-4 h-4 text-brand-500 shrink-0" /> 施工計画書 生成
+          </button>
+        </span>
+        {plans.length > 0 && <span className="text-xs text-slate-500 shrink-0">{plans.length} 件</span>}
+      </div>
+
+      {open && (
+        <div className="mt-1">
+          <p className="text-xs text-slate-400 mb-3">
+            工事の契約情報・体制から Word を自動生成します（総合／工種別／自主検査チェックリスト）。
+            発注機関長など台帳に無い項目は雛形の値のまま残るため、生成後に加筆してください。
+          </p>
+
+          {/* 生成コントロール */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <select value={planType} onChange={(e) => setPlanType(e.target.value)} className={inputCls + ' text-sm w-auto'}>
+              {SEKO_PLAN_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+            {planType !== 'soukatsu' && (
+              <select value={koshu} onChange={(e) => setKoshu(e.target.value)} className={inputCls + ' text-sm w-auto'}>
+                {SEKO_KOSHU.map((k) => <option key={k} value={k}>{k.replace(/^\d+_/, '')}</option>)}
+              </select>
+            )}
+            <Button onClick={onGenerate} disabled={busy} className="text-sm">
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              生成
+            </Button>
+          </div>
+
+          {/* 生成履歴 */}
+          {loading ? (
+            <div className="py-6 text-center text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline" /></div>
+          ) : plans.length === 0 ? (
+            <p className="text-xs text-slate-400 py-2">まだ生成した施工計画書はありません。</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {plans.map((p) => (
+                <li key={p.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-ink-700 bg-white dark:bg-ink-800">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-slate-800 dark:text-slate-100 truncate">{p.title || p.output_name}</div>
+                    <div className="text-[11px] text-slate-400">{fmtDateTime(p.created_at)}{p.generated_by ? ` ・ ${p.generated_by}` : ''}</div>
+                  </div>
+                  <Badge tone={SEKO_STATUS_TONE[p.status] || 'neutral'}>
+                    {(p.status === 'queued' || p.status === 'processing') && <Loader2 className="w-3 h-3 animate-spin mr-1 inline" />}
+                    {SEKO_STATUS_LABEL[p.status] || p.status}
+                  </Badge>
+                  {p.status === 'done' && (
+                    <Button variant="ghost" onClick={() => onDownload(p)} disabled={dlId === p.id} className="text-xs px-2 py-1">
+                      {dlId === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                      DL
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function BoqSection({ detail, notify, onReload }) {
   const [boq, setBoq] = useState(null)        // { rows, summary, total, imported_at }
   const [loading, setLoading] = useState(true)
