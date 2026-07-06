@@ -657,6 +657,8 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
 
       <SekoPlanSection detail={detail} notify={notify} />
 
+      <StructureSection detail={detail} notify={notify} isAdmin={isAdmin} />
+
       {/* 書類整理（保管庫）は別画面へ遷移 */}
       <button onClick={onOpenStorage}
         className="w-full text-left bg-white dark:bg-ink-800 rounded-xl border border-slate-200 dark:border-ink-700 px-4 py-3 hover:border-brand-300 dark:hover:border-brand-500/50 transition flex items-center gap-3">
@@ -735,6 +737,346 @@ function Meta({ label, value }) {
       <div className="text-[11px] text-slate-400">{label}</div>
       <div className="text-slate-800 dark:text-slate-200">{value || '—'}</div>
     </div>
+  )
+}
+
+// ── 構造部材（柱・梁・基礎・杭・壁・鉄骨 等）──
+//   構造図の部材リストを機械可読化して保持・確認する（migration 053 / API structural-members）。
+//   取込は「図面をローカルで画像化→Geminiで抽出→JSON」を本セクションで読み込み、
+//   AI抽出行は未確認(amber)で入り、内容を確認して確定する。将来 “符号×階” を
+//   工事写真の配筋・型枠検査ツリーへ展開して撮影漏れ管理に用いる。
+const STRUCT_TYPE_META = {
+  '柱': 'sky', '大梁': 'indigo', '小梁': 'violet', '地中梁': 'blue', '基礎': 'amber',
+  '杭': 'orange', '壁': 'teal', 'スラブ': 'cyan', '鉄骨柱': 'rose', '鉄骨梁': 'pink',
+  'ブレース': 'lime', 'デッキプレート': 'stone', 'その他': 'slate',
+}
+// 取込JSONを平坦化。配列そのまま or {p114:{records:[...]}} / {p114:[...]} の両形に対応。
+function flattenStructJson(parsed) {
+  if (Array.isArray(parsed)) return parsed
+  const out = []
+  if (parsed && typeof parsed === 'object') {
+    for (const [k, v] of Object.entries(parsed)) {
+      const recs = Array.isArray(v) ? v : (Array.isArray(v?.records) ? v.records : null)
+      if (!recs) continue
+      const page = Number(String(k).replace(/[^0-9]/g, '')) || null
+      for (const r of recs) out.push(page ? { ...r, __page: page } : r)
+    }
+  }
+  return out
+}
+
+function StructureSection({ detail, notify, isAdmin }) {
+  const [open, toggle] = useSectionCollapse('structural_members', false)
+  const [members, setMembers] = useState(null) // null=未ロード
+  const [order, setOrder] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [edit, setEdit] = useState(null)   // 編集対象（null=閉）／{__new:true}=新規
+  const [collapsed, setCollapsed] = useState(() => new Set())
+  const fileRef = useRef(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await axios.get(
+        `${apiUrl}/api/construction/projects/${detail.id}/structural-members`, authConfig())
+      setMembers(data.members || [])
+      setOrder(data.type_order || [])
+    } catch (e) {
+      notify(e.response?.data?.error || '構造部材の取得に失敗しました', 'error')
+    } finally { setLoading(false) }
+  }, [detail.id, notify])
+
+  useEffect(() => { if (open && members === null) load() }, [open, members, load])
+
+  const total = members?.length || 0
+  const unconfirmed = (members || []).filter((m) => !m.confirmed).length
+
+  const onImportFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImporting(true)
+    try {
+      const text = await file.text()
+      const list = flattenStructJson(JSON.parse(text))
+      if (!list.length) { notify('取込対象の部材が見つかりませんでした', 'error'); return }
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/structural-members/import`,
+        { members: list, replace_ai: true }, authConfig())
+      notify(`構造部材を ${data.inserted} 件取り込みました（内容を確認して確定してください）`)
+      await load()
+    } catch (err) {
+      notify(err.response?.data?.error || err.message || '取込に失敗しました', 'error')
+    } finally { setImporting(false) }
+  }
+
+  const confirmAll = async () => {
+    setBusy(true)
+    try {
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/structural-members/confirm-all`, {}, authConfig())
+      notify(`${data.confirmed} 件を確定しました`)
+      await load()
+    } catch (e) {
+      notify(e.response?.data?.error || '確定に失敗しました', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const toggleConfirm = async (m) => {
+    try {
+      await axios.patch(`${apiUrl}/api/construction/structural-members/${m.id}`,
+        { confirmed: !m.confirmed }, authConfig())
+      setMembers((prev) => prev.map((x) => x.id === m.id ? { ...x, confirmed: !m.confirmed } : x))
+    } catch (e) {
+      notify(e.response?.data?.error || '更新に失敗しました', 'error')
+    }
+  }
+
+  const onDelete = async (m) => {
+    setBusy(true)
+    try {
+      await axios.delete(`${apiUrl}/api/construction/structural-members/${m.id}`, authConfig())
+      setMembers((prev) => prev.filter((x) => x.id !== m.id))
+    } catch (e) {
+      notify(e.response?.data?.error || '削除に失敗しました', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const toggleGroup = (t) => setCollapsed((p) => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n })
+
+  // 種別ごとにグループ化（type_order 準拠、未知種別は末尾）
+  const groups = []
+  if (members) {
+    const seen = new Set()
+    const push = (t) => {
+      const rows = members.filter((m) => m.member_type === t)
+      if (rows.length) { groups.push([t, rows]); seen.add(t) }
+    }
+    for (const t of order) push(t)
+    for (const m of members) if (!seen.has(m.member_type)) push(m.member_type)
+  }
+
+  return (
+    <Card className="px-4 py-3 mb-4">
+      <div className="flex items-center gap-1.5">
+        <SectionChevron open={open} onClick={toggle} />
+        <button type="button" onClick={toggle}
+          className="text-sm font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 flex-1 text-left">
+          <Building2 className="w-4 h-4 text-brand-500" /> 構造部材
+          {total > 0 && <span className="text-xs font-normal text-slate-400">（{total} 部材）</span>}
+          {unconfirmed > 0 && <Badge tone="warning">未確認 {unconfirmed}</Badge>}
+        </button>
+      </div>
+
+      {open && (
+        <div className="mt-3">
+          <p className="text-xs text-slate-400 mb-3 leading-relaxed">
+            構造図の柱・梁・基礎・杭・壁・鉄骨リストを機械可読化して保持します。図面から抽出したJSONを取り込み、
+            内容を確認して「確定」します。確定した諸元は、今後の工事写真（配筋・型枠検査の符号別 撮り漏れチェック）や
+            電子小黒板への差込に活用します。
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={onImportFile} />
+            <Button variant="secondary" onClick={() => fileRef.current?.click()} disabled={importing}>
+              {importing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Upload className="w-4 h-4 mr-1" />}
+              抽出JSONを取込
+            </Button>
+            <Button variant="secondary" onClick={() => setEdit({ __new: true, member_type: '柱' })}>
+              <Plus className="w-4 h-4 mr-1" /> 手動追加
+            </Button>
+            {unconfirmed > 0 && (
+              <Button variant="secondary" onClick={confirmAll} disabled={busy}>
+                <CheckCircle2 className="w-4 h-4 mr-1" /> すべて確定（{unconfirmed}）
+              </Button>
+            )}
+            <button onClick={load} disabled={loading} title="再読み込み"
+              className="ml-auto p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-ink-700">
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {loading && members === null && (
+            <div className="py-6 text-center text-slate-400 text-sm">
+              <Loader2 className="w-5 h-5 animate-spin inline mr-2" />読み込み中…
+            </div>
+          )}
+
+          {members && total === 0 && (
+            <div className="py-6 text-center text-sm text-slate-400">
+              まだ構造部材がありません。「抽出JSONを取込」または「手動追加」で登録してください。
+            </div>
+          )}
+
+          {groups.map(([type, rows]) => {
+            const gOpen = !collapsed.has(type)
+            const gUnconf = rows.filter((r) => !r.confirmed).length
+            return (
+              <div key={type} className="mb-2 border border-slate-200 dark:border-ink-700 rounded-lg overflow-hidden">
+                <button type="button" onClick={() => toggleGroup(type)}
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-ink-800/60 text-left">
+                  <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${gOpen ? '' : '-rotate-90'}`} />
+                  <Badge tone={STRUCT_TYPE_META[type] ? 'info' : 'neutral'}>{type}</Badge>
+                  <span className="text-xs text-slate-500">{rows.length} 種</span>
+                  {gUnconf > 0 && <span className="text-[11px] text-amber-600 dark:text-amber-400">未確認 {gUnconf}</span>}
+                </button>
+                {gOpen && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-100 dark:border-ink-700">
+                          <th className="text-left font-medium px-2 py-1.5">符号</th>
+                          <th className="text-left font-medium px-2 py-1.5">階/位置</th>
+                          <th className="text-left font-medium px-2 py-1.5">断面</th>
+                          <th className="text-left font-medium px-2 py-1.5">主筋</th>
+                          <th className="text-left font-medium px-2 py-1.5">帯筋/あばら筋</th>
+                          <th className="text-left font-medium px-2 py-1.5">備考</th>
+                          <th className="px-2 py-1.5"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((m) => (
+                          <tr key={m.id}
+                            className={`border-b border-slate-50 dark:border-ink-800 ${m.confirmed ? '' : 'bg-amber-50/60 dark:bg-amber-500/5'}`}>
+                            <td className="px-2 py-1.5 font-semibold text-slate-800 dark:text-slate-100 whitespace-nowrap">
+                              {m.symbol}
+                              {m.source === 'ai' && !m.confirmed && (
+                                <span title="AI抽出・未確認" className="ml-1 inline-block align-middle">
+                                  <Sparkles className="w-3 h-3 text-amber-500 inline" />
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-slate-500 whitespace-nowrap">{m.floor || '—'}</td>
+                            <td className="px-2 py-1.5 text-slate-700 dark:text-slate-300 whitespace-nowrap">{m.section || '—'}</td>
+                            <td className="px-2 py-1.5 text-slate-700 dark:text-slate-300">{m.main_rebar || '—'}</td>
+                            <td className="px-2 py-1.5 text-slate-700 dark:text-slate-300">{m.shear_rebar || '—'}</td>
+                            <td className="px-2 py-1.5 text-slate-400 max-w-[16rem] truncate" title={m.note || ''}>{m.note || '—'}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap text-right">
+                              <button onClick={() => toggleConfirm(m)} title={m.confirmed ? '確定済み（クリックで戻す）' : '確定する'}
+                                className={`p-1 rounded ${m.confirmed ? 'text-emerald-500' : 'text-slate-300 hover:text-emerald-500'}`}>
+                                <CheckCircle2 className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => setEdit(m)} title="編集"
+                                className="p-1 rounded text-slate-400 hover:text-brand-500">
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              {isAdmin && (
+                                <button onClick={() => onDelete(m)} disabled={busy} title="削除（管理者）"
+                                  className="p-1 rounded text-slate-300 hover:text-danger-500">
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {edit && (
+        <StructMemberModal
+          projectId={detail.id}
+          member={edit.__new ? null : edit}
+          typeOrder={order}
+          onClose={() => setEdit(null)}
+          onSaved={(msg) => { setEdit(null); notify(msg); load() }}
+          onError={(m) => notify(m, 'error')}
+        />
+      )}
+    </Card>
+  )
+}
+
+// 構造部材の編集／手動追加モーダル
+const STRUCT_TYPES_FALLBACK = ['柱', '大梁', '小梁', '地中梁', '基礎', '杭', '壁', 'スラブ', '鉄骨柱', '鉄骨梁', 'ブレース', 'デッキプレート', 'その他']
+function StructMemberModal({ projectId, member, typeOrder, onClose, onSaved, onError }) {
+  const isNew = !member
+  const [f, setF] = useState({
+    member_type: member?.member_type || '柱',
+    symbol: member?.symbol || '',
+    floor: member?.floor || '',
+    section: member?.section || '',
+    main_rebar: member?.main_rebar || '',
+    shear_rebar: member?.shear_rebar || '',
+    concrete_strength: member?.concrete_strength || '',
+    note: member?.note || '',
+    confirmed: member ? !!member.confirmed : true,
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+  const types = (typeOrder && typeOrder.length ? typeOrder : STRUCT_TYPES_FALLBACK)
+
+  const submit = async () => {
+    if (!f.symbol.trim()) { onError('符号は必須です'); return }
+    setSaving(true)
+    try {
+      if (isNew) {
+        await axios.post(`${apiUrl}/api/construction/projects/${projectId}/structural-members`, f, authConfig())
+      } else {
+        await axios.patch(`${apiUrl}/api/construction/structural-members/${member.id}`, f, authConfig())
+      }
+      onSaved(isNew ? '構造部材を追加しました' : '構造部材を更新しました')
+    } catch (e) {
+      onError(e.response?.data?.error || '保存に失敗しました')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={isNew ? '構造部材を追加' : `構造部材を編集：${member.symbol}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="部材種別 *">
+            <select className={inputCls} value={f.member_type} onChange={set('member_type')}>
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+          <Field label="符号 *">
+            <input className={inputCls} value={f.symbol} onChange={set('symbol')} placeholder="例: C1 / G1 / FG1" />
+          </Field>
+          <Field label="階・位置">
+            <input className={inputCls} value={f.floor} onChange={set('floor')} placeholder="例: 2階 / R階 / 全断面" />
+          </Field>
+          <Field label="断面">
+            <input className={inputCls} value={f.section} onChange={set('section')} placeholder="例: 900x1000 / H-400x200 / t=180" />
+          </Field>
+        </div>
+        <Field label="主筋（梁は上端・下端／壁は縦筋）">
+          <input className={inputCls} value={f.main_rebar} onChange={set('main_rebar')} placeholder="例: 16-D25 / 上端 5-D25 下端 4-D25" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="帯筋・あばら筋・横筋">
+            <input className={inputCls} value={f.shear_rebar} onChange={set('shear_rebar')} placeholder="例: D13@100（K=高強度）" />
+          </Field>
+          <Field label="コンクリート強度">
+            <input className={inputCls} value={f.concrete_strength} onChange={set('concrete_strength')} placeholder="例: Fc24" />
+          </Field>
+        </div>
+        <Field label="備考">
+          <textarea className={inputCls} rows={2} value={f.note} onChange={set('note')} placeholder="位置・本数・支持力・ベースプレート寸法など" />
+        </Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer select-none">
+          <input type="checkbox" checked={f.confirmed} onChange={(e) => setF((s) => ({ ...s, confirmed: e.target.checked }))} />
+          内容を確認済み（確定）とする
+        </label>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <button onClick={onClose}
+          className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">
+          キャンセル
+        </button>
+        <Button onClick={submit} disabled={saving}>
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />{isNew ? '追加' : '保存'}</>}
+        </Button>
+      </div>
+    </ModalShell>
   )
 }
 
