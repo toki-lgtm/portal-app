@@ -2167,6 +2167,31 @@ function DocRow({ doc, onEdit }) {
 }
 
 // ── 新規工事モーダル ──
+// 工事追加時に読み込ませる必要書類スロット（目達原(6)庁舎新設で工事マスタを埋めた書類構成に準拠）
+// prefill=true の書類は「工事情報を自動入力」の読み取り対象。boq=true は数量書(Excel)取込へ回す。
+const REQUIRED_DOC_SLOTS = [
+  { key: 'contract', label: '契約書類', kind: 'doc', prefill: true,
+    accept: '.pdf,image/*',
+    desc: '建設工事請負契約書（＋変更契約書）／現場代理人等通知書・経歴書・資格者証／監督官通知 など',
+    reads: '工事名・工期・請負金額・契約番号・体制' },
+  { key: 'design', label: '設計図書（図面）', kind: 'doc', prefill: true,
+    accept: '.pdf,image/*',
+    desc: '設計図（100%版の図面PDF）',
+    reads: '建物配置・構造規模・面積' },
+  { key: 'spec', label: '特記仕様書', kind: 'doc', prefill: true,
+    accept: '.pdf,image/*',
+    desc: '建築工事特記仕様書（本紙）',
+    reads: '適用図書の版・材料仕様・品質/試験・施工条件' },
+  { key: 'boq', label: '数量書（Excel）', kind: 'boq',
+    accept: '.xlsx,.xls',
+    desc: '入札時積算数量書（別紙明細を含む xlsx）',
+    reads: '工事内容・工種内訳・数量（→ BOQ取込）' },
+  { key: 'other', label: 'その他', kind: 'doc',
+    accept: '.pdf,image/*',
+    desc: '現場説明書／建設リサイクル法13条 別紙／請負代金内訳書 など（保管のみ）',
+    reads: '保管庫へ自動振り分け' },
+]
+
 function NewProjectModal({ onClose, onCreated, onError }) {
   const [f, setF] = useState({
     project_name: '', project_code: '', client_org: '九州防衛局',
@@ -2178,19 +2203,29 @@ function NewProjectModal({ onClose, onCreated, onError }) {
   const [saving, setSaving] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
   const [aiMsg, setAiMsg] = useState('')
+  const [ingestMsg, setIngestMsg] = useState('')
+  // 必要書類スロットに入れたファイル（key→File配列）
+  const [slots, setSlots] = useState({ contract: [], design: [], spec: [], boq: [], other: [] })
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }))
+  const authHdr = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` } })
 
-  // 契約・設計図書などをアップロード→Geminiが工事情報を読み取り、空欄を自動入力
-  const onAiPrefill = async (e) => {
-    const files = e.target.files
-    if (!files || !files.length) return
+  const addFiles = (key) => (e) => {
+    const arr = Array.from(e.target.files || [])
+    if (arr.length) setSlots((s) => ({ ...s, [key]: [...s[key], ...arr] }))
+    e.target.value = ''
+  }
+  const removeFile = (key, idx) => setSlots((s) => ({ ...s, [key]: s[key].filter((_, i) => i !== idx) }))
+  const totalFiles = Object.values(slots).reduce((n, a) => n + a.length, 0)
+
+  // 契約書類・設計図書・特記仕様書を読み取り→工事情報の空欄を自動入力（既存の extract-info を再利用）
+  const onAiPrefill = async () => {
+    const files = [...slots.contract, ...slots.design, ...slots.spec]
+    if (!files.length) { onError('契約書類・設計図書・特記仕様書のいずれかを追加してください'); return }
     setAiBusy(true); setAiMsg('')
     try {
       const fd = new FormData()
       for (const file of files) fd.append('files', file)
-      const token = localStorage.getItem('authToken')
-      const { data } = await axios.post(`${apiUrl}/api/construction/extract-info`, fd,
-        { headers: { Authorization: `Bearer ${token}` } })
+      const { data } = await axios.post(`${apiUrl}/api/construction/extract-info`, fd, authHdr())
       const x = data.fields || {}
       // 空欄のみ補完（既入力は尊重）。発注者・工種・区分は読み取れた値があれば反映。
       setF((s) => ({
@@ -2212,40 +2247,103 @@ function NewProjectModal({ onClose, onCreated, onError }) {
       onError(err.response?.data?.error || 'AI読み取りに失敗しました')
     } finally {
       setAiBusy(false)
-      e.target.value = ''
     }
+  }
+
+  // 登録後に必要書類を保管・取込（best-effort：1件失敗しても工事登録は成立）。
+  const ingestDocuments = async (projectId) => {
+    let filed = 0, boqDone = 0, failed = 0
+    let done = 0
+    const docFiles = [...slots.contract, ...slots.design, ...slots.spec, ...slots.other]
+    for (const file of docFiles) {
+      setIngestMsg(`書類を保管中… (${++done}/${totalFiles})`)
+      try {
+        const fd = new FormData(); fd.append('file', file)
+        await axios.post(`${apiUrl}/api/construction/projects/${projectId}/documents/auto-file`, fd, authHdr())
+        filed++
+      } catch { failed++ }
+    }
+    for (const file of slots.boq) {
+      setIngestMsg(`数量書を取込中… (${++done}/${totalFiles})`)
+      try {
+        const fd = new FormData(); fd.append('file', file)
+        await axios.post(`${apiUrl}/api/construction/projects/${projectId}/import-boq`, fd, authHdr())
+        boqDone++
+      } catch { failed++ }
+    }
+    return { filed, boqDone, failed }
   }
 
   const submit = async () => {
     if (!f.project_name.trim()) { onError('工事名は必須です'); return }
-    setSaving(true)
+    setSaving(true); setIngestMsg('')
     try {
       const payload = { ...f, generate_checklist: genChecklist }
       const { data } = await axios.post(`${apiUrl}/api/construction/projects`, payload, authConfig())
-      onCreated(`工事を登録しました（検査チェック項目 ${data.generated_documents || 0} 件を生成）`)
+      // 工事作成に成功したら、必要書類スロットの中身を保管・取込
+      let ing = { filed: 0, boqDone: 0, failed: 0 }
+      if (totalFiles > 0) { try { ing = await ingestDocuments(data.id) } catch (e) { console.error('ingest:', e) } }
+      const parts = [`検査チェック項目 ${data.generated_documents || 0} 件を生成`]
+      if (ing.filed) parts.push(`書類 ${ing.filed} 件を保管`)
+      if (ing.boqDone) parts.push('数量書を取込')
+      if (ing.failed) parts.push(`※ ${ing.failed} 件は取込に失敗（工事詳細から再アップロードしてください）`)
+      onCreated(`工事を登録しました（${parts.join('／')}）`)
     } catch (e) {
       onError(e.response?.data?.error || '登録に失敗しました')
     } finally {
-      setSaving(false)
+      setSaving(false); setIngestMsg('')
     }
   }
 
   return (
     <ModalShell title="工事を追加" onClose={onClose} wide>
-      {/* 書類からAI自動入力（契約・設計図書をアップロードすると工事情報を読み取る） */}
+      {/* 必要書類スロット：目達原(6)の実績に準拠した書類を入れて、工事情報の自動入力＋保管庫への格納を行う */}
       <div className="mb-4 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-start justify-between gap-3 mb-2">
           <div className="text-xs text-slate-600 dark:text-slate-300">
-            <span className="font-semibold text-brand-700 dark:text-brand-300 flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5" />書類から自動入力
+            <span className="font-semibold text-brand-700 dark:text-brand-300 flex items-center gap-1 mb-0.5">
+              <Sparkles className="w-3.5 h-3.5" />必要書類を読み込ませて登録
             </span>
-            契約書・設計図書・特記仕様書などをアップロードすると、工事名・契約日・工期などをAIが読み取ります。
+            下の各欄に契約書類・設計図書などを入れ、「工事情報を自動入力」で欄を埋めてから登録します。登録時に書類は保管庫へ自動で振り分けられ、数量書はBOQへ取込まれます。
           </div>
-          <label className="shrink-0 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-1">
-            {aiBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-            書類を選択
-            <input type="file" multiple className="hidden" onChange={onAiPrefill} disabled={aiBusy} />
-          </label>
+          <button type="button" onClick={onAiPrefill} disabled={aiBusy}
+            className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
+            {aiBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            工事情報を自動入力
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {REQUIRED_DOC_SLOTS.map((slot) => (
+            <div key={slot.key} className="rounded-lg border border-slate-200 dark:border-ink-600 bg-white/70 dark:bg-ink-800/40 px-3 py-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1">
+                    {slot.kind === 'boq' ? <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500" /> : <Paperclip className="w-3.5 h-3.5 text-slate-400" />}
+                    {slot.label}
+                    {slot.prefill && <span className="text-[10px] font-normal text-brand-600 dark:text-brand-300 bg-brand-100 dark:bg-brand-500/20 rounded px-1">自動入力に使用</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{slot.desc}</div>
+                  <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">読み取り: {slot.reads}</div>
+                </div>
+                <label className="shrink-0 text-[11px] font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-0.5">
+                  <Upload className="w-3 h-3" />追加
+                  <input type="file" multiple accept={slot.accept} className="hidden" onChange={addFiles(slot.key)} />
+                </label>
+              </div>
+              {slots[slot.key].length > 0 && (
+                <ul className="mt-1.5 space-y-1">
+                  {slots[slot.key].map((file, i) => (
+                    <li key={i} className="flex items-center justify-between gap-2 text-[11px] bg-slate-50 dark:bg-ink-700/60 rounded px-2 py-1">
+                      <span className="truncate text-slate-700 dark:text-slate-200">{file.name}</span>
+                      <button type="button" onClick={() => removeFile(slot.key, i)} className="shrink-0 text-slate-400 hover:text-danger-500">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
         </div>
         {aiMsg && <p className="mt-2 text-[11px] text-success-700 dark:text-success-300">{aiMsg}</p>}
       </div>
@@ -2267,9 +2365,10 @@ function NewProjectModal({ onClose, onCreated, onError }) {
         <input type="checkbox" checked={genChecklist} onChange={(e) => setGenChecklist(e.target.checked)} />
         検査書類チェックリストを自動生成する（新設／改修の区分に応じた項目を生成）
       </label>
-      <div className="flex justify-end gap-2 mt-5">
-        <button onClick={onClose} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700">キャンセル</button>
-        <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />登録</>}</Button>
+      <div className="flex items-center justify-end gap-3 mt-5">
+        {saving && ingestMsg && <span className="text-[11px] text-slate-500 dark:text-slate-400">{ingestMsg}</span>}
+        <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700 disabled:opacity-60">キャンセル</button>
+        <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />{totalFiles > 0 ? '登録して書類を保管' : '登録'}</>}</Button>
       </div>
     </ModalShell>
   )
