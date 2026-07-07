@@ -774,6 +774,7 @@ function StructureSection({ detail, notify, isAdmin }) {
   const [busy, setBusy] = useState(false)
   const [edit, setEdit] = useState(null)   // 編集対象（null=閉）／{__new:true}=新規
   const [collapsed, setCollapsed] = useState(() => new Set())
+  const [lightbox, setLightbox] = useState(null)  // 断面図の拡大表示
   const fileRef = useRef(null)
 
   const load = useCallback(async () => {
@@ -928,6 +929,7 @@ function StructureSection({ detail, notify, isAdmin }) {
                       <thead>
                         <tr className="text-slate-400 border-b border-slate-100 dark:border-ink-700">
                           <th className="text-left font-medium px-2 py-1.5">符号</th>
+                          <th className="text-left font-medium px-2 py-1.5">断面図</th>
                           <th className="text-left font-medium px-2 py-1.5">階/位置</th>
                           <th className="text-left font-medium px-2 py-1.5">断面</th>
                           <th className="text-left font-medium px-2 py-1.5">主筋</th>
@@ -946,6 +948,15 @@ function StructureSection({ detail, notify, isAdmin }) {
                                 <span title="AI抽出・未確認" className="ml-1 inline-block align-middle">
                                   <Sparkles className="w-3 h-3 text-amber-500 inline" />
                                 </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {m.section_url ? (
+                                <img src={m.section_url} alt={`${m.symbol} 断面図`} loading="lazy"
+                                  onClick={() => setLightbox(m)}
+                                  className="h-11 w-auto max-w-[5rem] object-contain bg-white rounded border border-slate-200 dark:border-ink-600 cursor-zoom-in" />
+                              ) : (
+                                <span className="text-slate-300 dark:text-slate-600 text-[11px]">—</span>
                               )}
                             </td>
                             <td className="px-2 py-1.5 text-slate-500 whitespace-nowrap">{m.floor || '—'}</td>
@@ -990,6 +1001,25 @@ function StructureSection({ detail, notify, isAdmin }) {
           onSaved={(msg) => { setEdit(null); notify(msg); load() }}
           onError={(m) => notify(m, 'error')}
         />
+      )}
+
+      {lightbox && (
+        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
+          <button onClick={() => setLightbox(null)}
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white">
+            <X className="w-5 h-5" />
+          </button>
+          <div className="max-w-[92vw] max-h-[88vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            <img src={lightbox.section_url} alt={`${lightbox.symbol} 断面図`}
+              className="max-w-full max-h-[80vh] object-contain bg-white rounded-lg shadow-2xl" />
+            <div className="text-center text-white text-sm mt-3">
+              <span className="font-semibold">{lightbox.member_type}　{lightbox.symbol}</span>
+              {lightbox.floor ? `　${lightbox.floor}` : ''}
+              {lightbox.section ? `　／　${lightbox.section}` : ''}
+              {lightbox.main_rebar ? `　主筋 ${lightbox.main_rebar}` : ''}
+            </div>
+          </div>
+        </div>
       )}
     </Card>
   )
