@@ -772,6 +772,7 @@ function StructureSection({ detail, notify, isAdmin }) {
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [edit, setEdit] = useState(null)   // 編集対象（null=閉）／{__new:true}=新規
   const [collapsed, setCollapsed] = useState(() => new Set())
   const [lightbox, setLightbox] = useState(null)  // 断面図の拡大表示
@@ -845,6 +846,20 @@ function StructureSection({ detail, notify, isAdmin }) {
     } finally { setBusy(false) }
   }
 
+  // 構造部材（RC躯体）を工事写真ツリーへ展開：符号×階ごとに配筋・型枠検査の撮影対象を作る
+  const syncPhotos = async () => {
+    setSyncing(true)
+    try {
+      const { data } = await axios.post(
+        `${apiUrl}/api/construction/projects/${detail.id}/structural-members/sync-photos`, {}, authConfig())
+      notify(data.inserted
+        ? `工事写真ツリーに配筋・型枠検査 ${data.inserted} 件を追加しました`
+        : '工事写真ツリーは最新です（追加はありません）')
+    } catch (e) {
+      notify(e.response?.data?.error || '工事写真への展開に失敗しました', 'error')
+    } finally { setSyncing(false) }
+  }
+
   const toggleGroup = (t) => setCollapsed((p) => { const n = new Set(p); n.has(t) ? n.delete(t) : n.add(t); return n })
 
   // 種別ごとにグループ化（type_order 準拠、未知種別は末尾）
@@ -891,6 +906,13 @@ function StructureSection({ detail, notify, isAdmin }) {
             {unconfirmed > 0 && (
               <Button variant="secondary" onClick={confirmAll} disabled={busy}>
                 <CheckCircle2 className="w-4 h-4 mr-1" /> すべて確定（{unconfirmed}）
+              </Button>
+            )}
+            {total > 0 && (
+              <Button variant="secondary" onClick={syncPhotos} disabled={syncing}
+                title="RC躯体部材（柱・梁・基礎・壁・スラブ）を符号×階ごとに、配筋検査・型枠検査の撮影対象として工事写真ツリーへ追加します（冪等・不足分のみ追加）">
+                {syncing ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <Camera className="w-4 h-4 mr-1" />}
+                工事写真へ展開
               </Button>
             )}
             <button onClick={load} disabled={loading} title="再読み込み"
