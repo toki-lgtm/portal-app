@@ -571,6 +571,7 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
   const storedFiles = docs.reduce((n, d) => n + (d.files?.length || 0), 0)
   const [reflectBusy, setReflectBusy] = useState(false)
   const [reflect, setReflect] = useState(null) // { fields, used_files } 抽出結果。null=モーダル閉
+  const [ingestOpen, setIngestOpen] = useState(false) // 必要書類の後読み込みモーダル
   const [basicOpen, toggleBasic] = useSectionCollapse('basic_info', true)
 
   // 契約書・設計図書をアップロード→AIが工事情報を読み取り→確認のうえ既存の工事内容へ反映
@@ -610,7 +611,12 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
           )}
         </div>
         <div className="shrink-0 flex items-center gap-3">
-          <label title="契約書・設計図書をアップロードすると、AIが工事番号・契約金額・工期などを読み取り、確認のうえ工事内容へ反映します"
+          <button onClick={() => setIngestOpen(true)}
+            title="契約書類・設計図書・特記仕様書・数量書などをまとめて読み込み、保管庫へ振り分け・数量書のBOQ取込・工事情報の反映を行います（工事の新規追加時と同じ）。特記仕様書を入れると受検・試験リストのAI抽出に使えます。"
+            className="flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline">
+            <Upload className="w-4 h-4" /> 必要書類を読み込ませる
+          </button>
+          <label title="契約書・設計図書をアップロードすると、AIが工事番号・契約金額・工期などを読み取り、確認のうえ工事内容へ反映します（欄の反映のみ・保管はしません）"
             className="flex items-center gap-1 text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer">
             {reflectBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             契約書から反映
@@ -725,6 +731,16 @@ function DetailBody({ detail, onReload, isAdmin, onDelete, notify, onOpenCheckli
           onClose={() => setReflect(null)}
           onSaved={(msg) => { setReflect(null); onReload(); notify(msg) }}
           onError={(m) => notify(m, 'error')}
+        />
+      )}
+      {ingestOpen && (
+        <IngestDocsModal
+          project={detail}
+          onClose={() => setIngestOpen(false)}
+          onReload={onReload}
+          onDone={(msg) => { setIngestOpen(false); onReload(); notify(msg) }}
+          onError={(m) => notify(m, 'error')}
+          notify={notify}
         />
       )}
     </div>
@@ -2765,6 +2781,143 @@ function NewProjectModal({ onClose, onCreated, onError }) {
         <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Save className="w-4 h-4 mr-1" />{totalFiles > 0 ? '登録して書類を保管' : '登録'}</>}</Button>
       </div>
     </ModalShell>
+  )
+}
+
+// ── 既存工事に必要書類を後から読み込ませる（新規追加時の書類スロットと同じ体験）──
+//   工事枠だけ先に作った工事（例: 目達原(6)）で保管庫が空のとき、この画面から
+//   契約書類・設計図書・特記仕様書・数量書などをまとめて入れて、
+//   ①工事情報の自動入力（反映）②保管庫へ自動振り分け ③数量書のBOQ取込 を行う。
+//   特記仕様書を保管庫へ入れておくと、受検・試験リストのAI抽出に使える。
+function IngestDocsModal({ project, onClose, onReload, onDone, onError, notify }) {
+  const [slots, setSlots] = useState({ contract: [], design: [], spec: [], boq: [], other: [] })
+  const [aiBusy, setAiBusy] = useState(false)
+  const [reflect, setReflect] = useState(null)   // { fields, used_files } → ContractReflectModal（欄反映）
+  const [saving, setSaving] = useState(false)
+  const [ingestMsg, setIngestMsg] = useState('')
+  const authHdr = () => ({ headers: { Authorization: `Bearer ${localStorage.getItem('authToken')}` } })
+
+  const addFiles = (key) => (e) => {
+    const arr = Array.from(e.target.files || [])
+    if (arr.length) setSlots((s) => ({ ...s, [key]: [...s[key], ...arr] }))
+    e.target.value = ''
+  }
+  const removeFile = (key, idx) => setSlots((s) => ({ ...s, [key]: s[key].filter((_, i) => i !== idx) }))
+  const totalFiles = Object.values(slots).reduce((n, a) => n + a.length, 0)
+
+  // 契約/設計/特記 を読み取り → 反映モーダルを開く（新規追加と同じ extract-info を再利用）
+  const onAiPrefill = async () => {
+    const files = [...slots.contract, ...slots.design, ...slots.spec]
+    if (!files.length) { onError('契約書類・設計図書・特記仕様書のいずれかを追加してください'); return }
+    setAiBusy(true)
+    try {
+      const fd = new FormData()
+      for (const file of files) fd.append('files', file)
+      const { data } = await axios.post(`${apiUrl}/api/construction/extract-info`, fd, authHdr())
+      setReflect({ fields: data.fields || {}, used_files: data.used_files || [] })
+    } catch (err) {
+      onError(err.response?.data?.error || 'AI読み取りに失敗しました')
+    } finally { setAiBusy(false) }
+  }
+
+  // 保管庫へ取り込む（＋数量書をBOQ取込）。best-effort：1件失敗しても続行。
+  const submit = async () => {
+    if (totalFiles === 0) { onError('読み込ませる書類を追加してください'); return }
+    setSaving(true); setIngestMsg('')
+    let filed = 0, boqDone = 0, failed = 0, done = 0
+    const docFiles = [...slots.contract, ...slots.design, ...slots.spec, ...slots.other]
+    for (const file of docFiles) {
+      setIngestMsg(`書類を保管中… (${++done}/${totalFiles})`)
+      try {
+        const fd = new FormData(); fd.append('file', file)
+        await axios.post(`${apiUrl}/api/construction/projects/${project.id}/documents/auto-file`, fd, authHdr())
+        filed++
+      } catch { failed++ }
+    }
+    for (const file of slots.boq) {
+      setIngestMsg(`数量書を取込中… (${++done}/${totalFiles})`)
+      try {
+        const fd = new FormData(); fd.append('file', file)
+        await axios.post(`${apiUrl}/api/construction/projects/${project.id}/import-boq`, fd, authHdr())
+        boqDone++
+      } catch { failed++ }
+    }
+    setSaving(false); setIngestMsg('')
+    const parts = []
+    if (filed) parts.push(`書類 ${filed} 件を保管庫へ振り分け`)
+    if (boqDone) parts.push('数量書をBOQへ取込')
+    if (failed) parts.push(`※ ${failed} 件は取込に失敗（パスワード保護PDF等はスキップ）`)
+    onDone(parts.length ? parts.join('／') : '取り込みできる書類がありませんでした')
+  }
+
+  return (
+    <>
+      <ModalShell title="必要書類を読み込ませる" onClose={onClose} wide>
+        <div className="mb-4 rounded-xl border border-brand-200 dark:border-brand-500/30 bg-brand-50 dark:bg-brand-500/10 px-4 py-3">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="text-xs text-slate-600 dark:text-slate-300">
+              <span className="font-semibold text-brand-700 dark:text-brand-300 flex items-center gap-1 mb-0.5">
+                <Sparkles className="w-3.5 h-3.5" />工事登録後に書類をまとめて読み込む
+              </span>
+              各欄に契約書類・設計図書・特記仕様書などを入れてください。「工事情報を自動入力」で空欄を埋め、「保管庫へ取り込む」で書類を保管庫へ自動振り分け・数量書はBOQへ取込みます。<span className="font-semibold">特記仕様書を入れておくと、受検・試験リストのAI抽出に使えます。</span>
+            </div>
+            <button type="button" onClick={onAiPrefill} disabled={aiBusy}
+              className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-60">
+              {aiBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              工事情報を自動入力
+            </button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {REQUIRED_DOC_SLOTS.map((slot) => (
+              <div key={slot.key} className="rounded-lg border border-slate-200 dark:border-ink-600 bg-white/70 dark:bg-ink-800/40 px-3 py-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1">
+                      {slot.kind === 'boq' ? <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-500" /> : <Paperclip className="w-3.5 h-3.5 text-slate-400" />}
+                      {slot.label}
+                      {slot.prefill && <span className="text-[10px] font-normal text-brand-600 dark:text-brand-300 bg-brand-100 dark:bg-brand-500/20 rounded px-1">自動入力に使用</span>}
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{slot.desc}</div>
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">読み取り: {slot.reads}</div>
+                  </div>
+                  <label className="shrink-0 text-[11px] font-semibold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer flex items-center gap-0.5">
+                    <Upload className="w-3 h-3" />追加
+                    <input type="file" multiple accept={slot.accept} className="hidden" onChange={addFiles(slot.key)} />
+                  </label>
+                </div>
+                {slots[slot.key].length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {slots[slot.key].map((file, i) => (
+                      <li key={i} className="flex items-center justify-between gap-2 text-[11px] bg-slate-50 dark:bg-ink-700/60 rounded px-2 py-1">
+                        <span className="truncate text-slate-700 dark:text-slate-200">{file.name}</span>
+                        <button type="button" onClick={() => removeFile(slot.key, i)} className="shrink-0 text-slate-400 hover:text-danger-500">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 mt-1">
+          {saving && ingestMsg && <span className="text-[11px] text-slate-500 dark:text-slate-400">{ingestMsg}</span>}
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-ink-700 disabled:opacity-60">閉じる</button>
+          <Button onClick={submit} disabled={saving || totalFiles === 0}>{saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <><FolderOpen className="w-4 h-4 mr-1" />保管庫へ取り込む</>}</Button>
+        </div>
+      </ModalShell>
+      {reflect && (
+        <ContractReflectModal
+          detail={project}
+          fields={reflect.fields}
+          usedFiles={reflect.used_files}
+          onClose={() => setReflect(null)}
+          onSaved={(msg) => { setReflect(null); onReload(); notify(msg) }}
+          onError={(m) => onError(m)}
+        />
+      )}
+    </>
   )
 }
 
