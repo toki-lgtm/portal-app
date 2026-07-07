@@ -4036,11 +4036,21 @@ function DesignChangeFilesModal({ change, detail, onClose, onReload, onReloadDet
 // ── 工事写真管理 ─────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════
 
+// 署名URL等から ImageBitmap を読み込む（断面図の焼き込み用）。CORSを避けるため
+// fetch→blob→createImageBitmap で取得する。
+async function loadImageBitmap(url) {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('image fetch failed')
+  const blob = await res.blob()
+  return await createImageBitmap(blob)
+}
+
 // 画像の左下に「電子小黒板」を焼き込んで新しい File を返す。参照様式に準拠：
-//   上部 = ラベル列｜値列の小さめの表（gridRows）
+//   上部 = 断面図（sectionImage・構造部材の配筋断面。任意）
+//   中部 = ラベル列｜値列の小さめの表（gridRows）
 //   下部 = 大きな自由記述欄（freeLines）
 // 背景は半透明（透過）。失敗時（古い端末等）は元ファイルをそのまま返す。
-async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
+async function burnBlackboard(file, { gridRows = [], freeLines = [], sectionImage = null }) {
   try {
     // EXIF の向きを反映してデコード（スマホ写真の回転ズレ対策）
     const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
@@ -4065,6 +4075,17 @@ async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
     // 黒板の幅は固定（内容で伸縮させない）。画像幅の 1/3。
     const boxW = Math.round(W / 3)
 
+    // 断面図パネル（任意）＝黒板の最上段。白背景の上に配筋断面図を等比で収める。
+    let sectionH = 0, sImgW = 0, sImgH = 0
+    if (sectionImage && sectionImage.width && sectionImage.height) {
+      const iw = sectionImage.width, ih = sectionImage.height
+      const maxW = boxW, maxH = Math.round(H * 0.42)
+      let dw = maxW, dh = Math.round(dw * ih / iw)
+      if (dh > maxH) { dh = maxH; dw = Math.round(dh * iw / ih) }
+      sImgW = dw; sImgH = dh
+      sectionH = dh
+    }
+
     // 表のラベル列幅（ラベル文字に合わせる）／値列は残り
     ctx.font = `bold ${gridFont}px sans-serif`
     let labelW = 0
@@ -4074,27 +4095,38 @@ async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
 
     const gridH = grid.length * gridRowH
     const freeH = frees.length ? frees.length * freeRowH + freePadY * 2 : 0
-    const boxH = gridH + freeH
+    const boxH = sectionH + gridH + freeH
     const margin = Math.round(W / 60)
     const x = margin
     const y = H - boxH - margin
+    const gy = y + sectionH // 表の開始 y（断面図の下）
 
-    // 下地（半透明・透過）
+    // 下地（半透明・透過）※表・自由記述の範囲のみ。断面図は下で白背景を敷く。
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
-    ctx.fillRect(x, y, boxW, boxH)
+    ctx.fillRect(x, gy, boxW, gridH + freeH)
+
+    // 断面図（白背景の上に等比で中央寄せ描画）
+    if (sectionH) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.92)'
+      ctx.fillRect(x, y, boxW, sectionH)
+      const ix = x + Math.round((boxW - sImgW) / 2)
+      ctx.drawImage(sectionImage, ix, y, sImgW, sImgH)
+    }
 
     // 罫線（白）
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'
     ctx.lineWidth = Math.max(1, Math.round(gridFont / 12))
     ctx.strokeRect(x, y, boxW, boxH)
     ctx.beginPath()
+    // 断面図と表の境界線
+    if (sectionH) { ctx.moveTo(x, gy); ctx.lineTo(x + boxW, gy) }
     // 表の行間＋（表と自由記述の境界）
     for (let i = 1; i <= grid.length; i++) {
-      const yy = y + i * gridRowH
+      const yy = gy + i * gridRowH
       ctx.moveTo(x, yy); ctx.lineTo(x + boxW, yy)
     }
     // 表のラベル/値 縦線（表の範囲のみ）
-    if (grid.length) { ctx.moveTo(x + labelW, y); ctx.lineTo(x + labelW, y + gridH) }
+    if (grid.length) { ctx.moveTo(x + labelW, gy); ctx.lineTo(x + labelW, gy + gridH) }
     ctx.stroke()
 
     // 表の文字（小さめ・縦中央・左寄せ。長い値は列内に自動圧縮）
@@ -4102,14 +4134,14 @@ async function burnBlackboard(file, { gridRows = [], freeLines = [] }) {
     ctx.textBaseline = 'middle'
     ctx.font = `bold ${gridFont}px sans-serif`
     grid.forEach(([label, value], i) => {
-      const cy = y + i * gridRowH + Math.round(gridRowH / 2)
+      const cy = gy + i * gridRowH + Math.round(gridRowH / 2)
       ctx.fillText(label, x + padX, cy, labelW - padX * 2)
       ctx.fillText(String(value || ''), x + labelW + padX, cy, valueW - padX * 2)
     })
     // 自由記述（大きめ）
     ctx.font = `bold ${freeFont}px sans-serif`
     frees.forEach((t, i) => {
-      const cy = y + gridH + freePadY + i * freeRowH + Math.round(freeRowH / 2)
+      const cy = gy + gridH + freePadY + i * freeRowH + Math.round(freeRowH / 2)
       ctx.fillText(t, x + padX, cy, boxW - padX * 2)
     })
 
@@ -4276,8 +4308,17 @@ function PhotoBody({ detail, notify }) {
           if (node.edition) freeLines.push(node.edition)
           if (node.photo_item) freeLines.push(node.photo_item)
           if (node.target && node.target !== node.photo_item) freeLines.push(node.target)
+          if (node.note) freeLines.push(node.note) // 断面/主筋/帯筋などのスペック
           if (node.timing) freeLines.push(node.timing)
-          toSend = await Promise.all(toSend.map((f) => burnBlackboard(f, { gridRows, freeLines })))
+          // 構造部材（躯体検査）ノードには、その部材の配筋断面図を小黒板上段へ差し込む
+          let sectionImage = null
+          if (node.section_url) {
+            sectionImage = await loadImageBitmap(node.section_url).catch(() => null)
+          }
+          toSend = await Promise.all(
+            toSend.map((f) => burnBlackboard(f, { gridRows, freeLines, sectionImage }))
+          )
+          if (sectionImage && sectionImage.close) sectionImage.close()
         }
       }
       for (const file of toSend) {
