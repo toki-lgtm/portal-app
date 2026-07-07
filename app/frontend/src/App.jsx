@@ -44,6 +44,7 @@ import ExamPage from './components/ExamPage'
 import ManualPage from './components/ManualPage'
 import QuoteComparePage from './components/QuoteComparePage'
 import CalendarPage, { MonthGrid, KIND_META } from './components/CalendarPage'
+import ISOPage from './components/ISOPage'
 import { applyTheme, loadTheme } from './lib/theme'
 import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
@@ -1268,6 +1269,8 @@ function AppContent() {
     page = <ManualPage onBack={() => setView('dashboard')} />
   } else if (view === 'calendar') {
     page = <CalendarPage onBack={() => setView('dashboard')} />
+  } else if (view === 'iso') {
+    page = <ISOPage onBack={() => setView('dashboard')} />
   } else {
     page = (
       <DashboardPage
