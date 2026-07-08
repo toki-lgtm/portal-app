@@ -50,28 +50,45 @@ function MemberChip({ m }) {
 }
 
 // 人員配列の編集UI（名前／協力会社／人数）。
-function MembersEditor({ members, onChange }) {
+// staffOptions（社員名の配列）があれば、氏名欄を社員一覧からの選択（入力候補）にする。
+// 名簿外（協力会社・応援）の人はそのまま自由入力も可。
+function MembersEditor({ members, onChange, staffOptions = [] }) {
   const update = (i, key, val) => onChange(members.map((m, idx) => (idx === i ? { ...m, [key]: val } : m)))
   const remove = (i) => onChange(members.filter((_, idx) => idx !== i))
   const add = () => onChange([...members, { name: '', company: '', count: 1 }])
   return (
     <div className="space-y-2">
-      {members.map((m, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <input className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
-            placeholder="氏名 / 協力会社名" value={m.name} onChange={(e) => update(i, 'name', e.target.value)} />
-          <input className="w-24 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
-            placeholder="協力会社" value={m.company || ''} onChange={(e) => update(i, 'company', e.target.value)} />
-          <input type="number" min="1"
-            className="w-16 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm tabular-nums"
-            value={m.count ?? 1} onChange={(e) => update(i, 'count', Math.max(1, parseInt(e.target.value, 10) || 1))} />
-          <button type="button" onClick={() => remove(i)} aria-label="削除" className="shrink-0 p-1.5 text-slate-400 hover:text-danger-500">
-            <Trash2 className="w-4 h-4" />
-          </button>
-        </div>
-      ))}
+      {/* 氏名欄の入力候補（社員一覧） */}
+      <datalist id="site-staff-options">
+        {staffOptions.map((n) => <option key={n} value={n} />)}
+      </datalist>
+      {members.map((m, i) => {
+        const isStaff = staffOptions.includes((m.name || '').trim())
+        return (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              list="site-staff-options"
+              className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
+              placeholder="社員を選択 / 協力会社名"
+              value={m.name}
+              onChange={(e) => update(i, 'name', e.target.value)}
+            />
+            <span className={`shrink-0 text-xs w-10 text-center ${isStaff ? 'text-success-600 dark:text-success-400' : 'text-slate-300 dark:text-slate-600'}`}>
+              {isStaff ? '社員' : ''}
+            </span>
+            <input className="w-24 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
+              placeholder="協力会社" value={m.company || ''} onChange={(e) => update(i, 'company', e.target.value)} />
+            <input type="number" min="1"
+              className="w-16 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm tabular-nums"
+              value={m.count ?? 1} onChange={(e) => update(i, 'count', Math.max(1, parseInt(e.target.value, 10) || 1))} />
+            <button type="button" onClick={() => remove(i)} aria-label="削除" className="shrink-0 p-1.5 text-slate-400 hover:text-danger-500">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        )
+      })}
       <Button variant="secondary" size="sm" onClick={add}><Plus className="w-4 h-4" />人員を追加</Button>
-      <p className="text-xs text-slate-400">協力会社をまとめて数える場合は「協力会社」に会社名、人数欄に人数を入れてください（例: 福建工業 5）。</p>
+      <p className="text-xs text-slate-400">氏名欄をタップすると社員一覧から選べます。協力会社はそのまま会社名を入力し、人数欄に人数を入れてください（例: 福建工業 5）。</p>
     </div>
   )
 }
@@ -83,6 +100,7 @@ export default function SiteAssignmentsPage({ onBack }) {
   const [busy, setBusy] = useState(false)
   const [edit, setEdit] = useState(null)
   const [expanded, setExpanded] = useState(null) // 元メッセージを開いている行id
+  const [staffOptions, setStaffOptions] = useState([]) // 氏名ピッカー用の社員名リスト
   const { toast, showToast } = useToast()
 
   const load = useCallback(async (date) => {
@@ -101,7 +119,16 @@ export default function SiteAssignmentsPage({ onBack }) {
   useEffect(() => {
     load()
     axios.get(`${apiUrl}/api/my-permissions`, authConfig())
-      .then((res) => setIsAdmin(res.data?.role === 'admin'))
+      .then((res) => {
+        const admin = res.data?.role === 'admin'
+        setIsAdmin(admin)
+        if (admin) {
+          // 管理者のみ氏名ピッカー用の社員一覧を取得
+          axios.get(`${apiUrl}/api/site-assignments/staff`, authConfig())
+            .then((r) => setStaffOptions((r.data || []).map((s) => s.name)))
+            .catch(() => setStaffOptions([]))
+        }
+      })
       .catch(() => setIsAdmin(false))
   }, [load])
 
@@ -319,7 +346,7 @@ export default function SiteAssignmentsPage({ onBack }) {
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">人員</label>
-              <MembersEditor members={edit.members || []} onChange={(members) => setEdit({ ...edit, members })} />
+              <MembersEditor members={edit.members || []} staffOptions={staffOptions} onChange={(members) => setEdit({ ...edit, members })} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setEdit(null)}>キャンセル</Button>
