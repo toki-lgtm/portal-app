@@ -7,6 +7,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
+import { InstrumentsTab, RiskTab, ScheduleTab } from './ISOTabs'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
@@ -27,9 +28,9 @@ const APPROVERS = ['社長', '専務', '部長']
 // F0では「台帳」タブのみ稼働。F1で測定機器/リスクアセス/スケジュールを追加予定。
 const TABS = [
   { key: 'ledger', label: '文書記録台帳', ready: true },
-  { key: 'instruments', label: '測定機器', ready: false },
-  { key: 'risk', label: 'リスクアセス', ready: false },
-  { key: 'schedule', label: 'スケジュール', ready: false },
+  { key: 'instruments', label: '測定機器', ready: true },
+  { key: 'risk', label: 'リスクアセス', ready: true },
+  { key: 'schedule', label: 'スケジュール', ready: true },
 ]
 
 const inputCls =
@@ -128,7 +129,10 @@ export default function ISOPage({ onBack }) {
       {toast && <Toast toast={toast} />}
 
       <main className="max-w-7xl mx-auto px-6 py-6">
-        {loading ? (
+        {tab === 'instruments' && <InstrumentsTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'risk' && <RiskTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'schedule' && <ScheduleTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'ledger' && (loading ? (
           <div className="text-center py-20">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" />
             <p className="text-slate-500 dark:text-slate-400 mt-3">読み込み中...</p>
@@ -237,7 +241,7 @@ export default function ISOPage({ onBack }) {
               出典: ISO文書記録保管庫「文書記録管理台帳」（58分類）。閲覧は全社員、編集はISO管理者のみ。
             </p>
           </>
-        )}
+        ))}
       </main>
 
       {editDoc && (
