@@ -328,12 +328,20 @@ export function AlcoholTab({ isAdmin, showToast }) {
   const [quick, setQuick] = useState({ check_date: today(), driver: '', timing: '出発', method: '目視', result: '非検知', value: '', checker: '' })
   const [saving, setSaving] = useState(false)
   const [editModal, setEditModal] = useState(null)
+  const [selectedDate, setSelectedDate] = useState(today()) // 明細表示する日
+  const [refreshKey, setRefreshKey] = useState(0)            // 記録後に月サマリ再取得
 
+  // 選択日の記録だけ取得（全件は重いので日単位）
   const load = useCallback(async () => {
-    try { const r = await axios.get(`${apiUrl}/api/iso/alcohol-checks`, authConfig()); setRows(r.data || []) }
-    catch { showToast('error', 'アルコールチェック記録の取得に失敗しました'); setRows([]) }
-  }, [showToast])
+    setRows(null)
+    try {
+      const r = await axios.get(`${apiUrl}/api/iso/alcohol-checks`, { params: { from: selectedDate, to: selectedDate }, ...authConfig() })
+      setRows(r.data || [])
+    } catch { showToast('error', 'アルコールチェック記録の取得に失敗しました'); setRows([]) }
+  }, [showToast, selectedDate])
   useEffect(() => { load() }, [load])
+  // 記録された時: 明細も月サマリも更新
+  const afterRecord = useCallback(() => { load(); setRefreshKey((k) => k + 1) }, [load])
 
   const setQ = (k, v) => setQuick((p) => ({ ...p, [k]: v }))
 
@@ -345,23 +353,21 @@ export function AlcoholTab({ isAdmin, showToast }) {
       await axios.post(`${apiUrl}/api/iso/alcohol-checks`, payload, authConfig())
       showToast('success', '記録しました')
       setQuick({ check_date: today(), driver: '', timing: quick.timing, method: quick.method, result: '非検知', value: '', checker: quick.checker })
-      load()
+      afterRecord()
     } catch (e) { showToast('error', e.response?.data?.error || '記録に失敗しました') }
     finally { setSaving(false) }
   }
 
   const del = async (id) => {
-    try { await axios.delete(`${apiUrl}/api/iso/alcohol-checks/${id}`, authConfig()); showToast('success', '削除しました'); load() }
+    try { await axios.delete(`${apiUrl}/api/iso/alcohol-checks/${id}`, authConfig()); showToast('success', '削除しました'); afterRecord() }
     catch (e) { showToast('error', e.response?.data?.error || '削除に失敗しました') }
   }
-
-  if (rows === null) return <Loading />
 
   return (
     <>
       <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">運転前後の酒気帯び確認を記録（誰でも記録できます）。点呼はまとめて、例外は個別に。</p>
 
-      <RollCallPanel showToast={showToast} onRecorded={load} />
+      <RollCallPanel showToast={showToast} onRecorded={afterRecord} />
 
       <details className="mb-5">
         <summary className="text-sm font-semibold text-slate-600 dark:text-slate-300 cursor-pointer">個別に記録する（例外・検知時など）</summary>
@@ -389,6 +395,15 @@ export function AlcoholTab({ isAdmin, showToast }) {
       </Card>
       </details>
 
+      {/* 月サマリ: 日付を遡って記録状況を確認・記録漏れ検出 */}
+      <AlcoholHistory refreshKey={refreshKey} selectedDate={selectedDate} onPickDay={setSelectedDate} showToast={showToast} />
+
+      {/* 選択日の明細 */}
+      <div className="flex items-center gap-3 mt-5 mb-2">
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">明細</h3>
+        <input type="date" className="px-2 py-1 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-900 text-sm" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+        <span className="text-xs text-slate-400">{rows === null ? '読み込み中…' : `${rows.length}件`}</span>
+      </div>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -405,7 +420,7 @@ export function AlcoholTab({ isAdmin, showToast }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {(rows || []).map((r) => (
                 <tr key={r.id} className={`border-b border-slate-100 dark:border-ink-800 ${r.result === '検知' ? 'bg-danger-50 dark:bg-danger-500/10' : 'hover:bg-slate-50 dark:hover:bg-ink-900/50'}`}>
                   <td className="px-3 py-2 whitespace-nowrap">{r.check_date}</td>
                   <td className="px-3 py-2 font-medium text-slate-900 dark:text-white">{r.driver}</td>
@@ -424,14 +439,101 @@ export function AlcoholTab({ isAdmin, showToast }) {
                   )}
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="px-3 py-10 text-center text-slate-400">記録がありません</td></tr>}
+              {rows !== null && rows.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="px-3 py-10 text-center text-slate-400">この日の記録はありません</td></tr>}
+              {rows === null && <tr><td colSpan={isAdmin ? 8 : 7} className="px-6 py-8 text-center"><Loader2 className="w-5 h-5 animate-spin mx-auto text-brand-500" /></td></tr>}
             </tbody>
           </table>
         </div>
       </Card>
 
-      {editModal && <AlcoholEditModal row={editModal.row} onClose={() => setEditModal(null)} onSaved={() => { setEditModal(null); load() }} showToast={showToast} />}
+      {editModal && <AlcoholEditModal row={editModal.row} onClose={() => setEditModal(null)} onSaved={() => { setEditModal(null); afterRecord() }} showToast={showToast} />}
     </>
+  )
+}
+
+// ── 月次の記録状況（日別サマリ・記録漏れ検出）──
+const AL_STATUS = {
+  complete: { tone: 'success', label: '完了' },
+  partial: { tone: 'warning', label: '一部' },
+  missing: { tone: 'danger', label: '未記録' },
+  off: { tone: 'neutral', label: '休' },
+  off_has: { tone: 'info', label: '休(記録有)' },
+  future: { tone: 'neutral', label: '—' },
+}
+function AlcoholHistory({ refreshKey, selectedDate, onPickDay, showToast }) {
+  const [month, setMonth] = useState(() => (selectedDate || today()).slice(0, 7))
+  const [data, setData] = useState(null) // {month, roster, days:[]}
+
+  const load = useCallback(async () => {
+    setData(null)
+    try {
+      const r = await axios.get(`${apiUrl}/api/iso/alcohol-summary`, { params: { month }, ...authConfig() })
+      setData(r.data)
+    } catch { showToast('error', '月次サマリの取得に失敗しました'); setData({ days: [] }) }
+  }, [month, showToast])
+  useEffect(() => { load() }, [load, refreshKey])
+
+  const shiftMonth = (delta) => {
+    const [y, m] = month.split('-').map(Number)
+    const d = new Date(y, m - 1 + delta, 1)
+    setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  }
+  const dow = ['日', '月', '火', '水', '木', '金', '土']
+  const days = data?.days || []
+  const missingDays = days.filter((d) => d.status === 'missing')
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => shiftMonth(-1)} className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-ink-700 text-slate-600 dark:text-slate-300">◀</button>
+          <span className="text-base font-bold text-slate-900 dark:text-white tabular-nums">{month.replace('-', '年')}月</span>
+          <button onClick={() => shiftMonth(1)} className="px-2 py-1 rounded-lg hover:bg-slate-100 dark:hover:bg-ink-700 text-slate-600 dark:text-slate-300">▶</button>
+        </div>
+        {data && (
+          missingDays.length > 0
+            ? <Badge tone="danger"><AlertTriangle className="w-3.5 h-3.5" />未記録 {missingDays.length}日</Badge>
+            : <Badge tone="success">記録漏れなし（対象{data.roster}名）</Badge>
+        )}
+      </div>
+
+      {data === null ? <Loading /> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-ink-700">
+                <th className="px-2 py-1.5 font-semibold">日付</th>
+                <th className="px-2 py-1.5 font-semibold text-center">状態</th>
+                <th className="px-2 py-1.5 font-semibold text-center">出発</th>
+                <th className="px-2 py-1.5 font-semibold text-center">帰着</th>
+                <th className="px-2 py-1.5 font-semibold text-center">検知</th>
+                <th className="px-2 py-1.5"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {days.filter((d) => d.status !== 'off').map((d) => {
+                const st = AL_STATUS[d.status] || AL_STATUS.future
+                const sel = d.date === selectedDate
+                return (
+                  <tr key={d.date}
+                    className={`border-b border-slate-100 dark:border-ink-800 cursor-pointer ${sel ? 'bg-brand-50 dark:bg-brand-500/15' : 'hover:bg-slate-50 dark:hover:bg-ink-900/50'}`}
+                    onClick={() => onPickDay(d.date)}>
+                    <td className="px-2 py-1.5 whitespace-nowrap">{Number(d.date.slice(8))}日<span className="text-xs text-slate-400">（{dow[d.dow]}）</span></td>
+                    <td className="px-2 py-1.5 text-center"><Badge tone={st.tone}>{st.label}</Badge></td>
+                    <td className="px-2 py-1.5 text-center tabular-nums">{d.dep || '—'}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums">{d.ret || '—'}</td>
+                    <td className="px-2 py-1.5 text-center">{d.detected > 0 ? <span className="text-danger-600 font-bold">{d.detected}</span> : '—'}</td>
+                    <td className="px-2 py-1.5 text-right text-xs text-brand-500">明細 ›</td>
+                  </tr>
+                )
+              })}
+              {days.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-400">記録がありません</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs text-slate-400 mt-2">営業日（日曜・公休日・計画有給を除く）で「出発・帰着とも全員」記録済みなら完了。行をクリックで下に明細を表示。</p>
+    </Card>
   )
 }
 
