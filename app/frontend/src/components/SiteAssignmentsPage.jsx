@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Fragment } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, HardHat, Users, RefreshCw, Plus, Pencil, Trash2,
-  Loader2, ChevronLeft, ChevronRight,
+  Loader2, ChevronLeft, ChevronRight, ChevronDown,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -26,64 +26,52 @@ function fmtDate(d) {
   return label
 }
 
-// 人員1名を表すチップ。協力会社（company あり）は色を変えて人数を添える。
+// 人員1名の表示。協力会社=琥珀色＋人数、名簿未一致の個人=グレー＋注記。
 function MemberChip({ m }) {
-  const isPartner = !!m.company
-  const cls = isPartner
-    ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200'
+  if (m.company) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-sm font-medium bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
+        {m.name}{m.count > 1 && <span className="text-xs opacity-80">{m.count}名</span>}
+      </span>
+    )
+  }
+  const unmatched = m.matched === false
+  const cls = unmatched
+    ? 'bg-slate-100 text-slate-500 dark:bg-ink-700 dark:text-slate-400'
     : 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-sm font-medium ${cls}`}>
-      {m.name}
-      {isPartner && m.count > 1 && <span className="text-xs opacity-80">{m.count}名</span>}
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-sm font-medium ${cls}`}
+      title={unmatched ? `社員名簿に一致せず（元の呼び名: ${m.raw_name || m.name}）` : (m.raw_name && m.raw_name !== m.name ? `元の呼び名: ${m.raw_name}` : undefined)}
+    >
+      {m.name}{unmatched && <span className="text-xs">?</span>}
     </span>
   )
 }
 
 // 人員配列の編集UI（名前／協力会社／人数）。
 function MembersEditor({ members, onChange }) {
-  const update = (i, key, val) => {
-    const next = members.map((m, idx) => (idx === i ? { ...m, [key]: val } : m))
-    onChange(next)
-  }
+  const update = (i, key, val) => onChange(members.map((m, idx) => (idx === i ? { ...m, [key]: val } : m)))
   const remove = (i) => onChange(members.filter((_, idx) => idx !== i))
   const add = () => onChange([...members, { name: '', company: '', count: 1 }])
-
   return (
     <div className="space-y-2">
       {members.map((m, i) => (
         <div key={i} className="flex items-center gap-2">
-          <input
-            className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
-            placeholder="名前 / 協力会社名"
-            value={m.name}
-            onChange={(e) => update(i, 'name', e.target.value)}
-          />
-          <input
-            className="w-24 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
-            placeholder="協力会社"
-            value={m.company || ''}
-            onChange={(e) => update(i, 'company', e.target.value)}
-          />
-          <input
-            type="number"
-            min="1"
+          <input className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
+            placeholder="氏名 / 協力会社名" value={m.name} onChange={(e) => update(i, 'name', e.target.value)} />
+          <input className="w-24 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
+            placeholder="協力会社" value={m.company || ''} onChange={(e) => update(i, 'company', e.target.value)} />
+          <input type="number" min="1"
             className="w-16 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm tabular-nums"
-            value={m.count ?? 1}
-            onChange={(e) => update(i, 'count', Math.max(1, parseInt(e.target.value, 10) || 1))}
-          />
-          <button type="button" onClick={() => remove(i)} aria-label="削除"
-            className="shrink-0 p-1.5 text-slate-400 hover:text-danger-500">
+            value={m.count ?? 1} onChange={(e) => update(i, 'count', Math.max(1, parseInt(e.target.value, 10) || 1))} />
+          <button type="button" onClick={() => remove(i)} aria-label="削除" className="shrink-0 p-1.5 text-slate-400 hover:text-danger-500">
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
       ))}
-      <Button variant="secondary" size="sm" onClick={add}>
-        <Plus className="w-4 h-4" />人員を追加
-      </Button>
-      <p className="text-xs text-slate-400">
-        協力会社をまとめて数える場合は「協力会社」に会社名、人数欄に人数を入れてください（例: 福建工業さん 5）。
-      </p>
+      <Button variant="secondary" size="sm" onClick={add}><Plus className="w-4 h-4" />人員を追加</Button>
+      <p className="text-xs text-slate-400">協力会社をまとめて数える場合は「協力会社」に会社名、人数欄に人数を入れてください（例: 福建工業 5）。</p>
     </div>
   )
 }
@@ -93,7 +81,8 @@ export default function SiteAssignmentsPage({ onBack }) {
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [edit, setEdit] = useState(null) // 編集/追加モーダルの対象（{id?, work_date, site_name, work_content, members}）
+  const [edit, setEdit] = useState(null)
+  const [expanded, setExpanded] = useState(null) // 元メッセージを開いている行id
   const { toast, showToast } = useToast()
 
   const load = useCallback(async (date) => {
@@ -116,13 +105,11 @@ export default function SiteAssignmentsPage({ onBack }) {
       .catch(() => setIsAdmin(false))
   }, [load])
 
-  // 日付ナビ（登録のある作業日の中を前後移動）
   const dates = data.dates || []
   const idx = dates.indexOf(data.work_date)
   const goPrev = () => { if (idx >= 0 && idx < dates.length - 1) load(dates[idx + 1]) } // dates は新しい順
   const goNext = () => { if (idx > 0) load(dates[idx - 1]) }
 
-  // 管理者：今夜（本日）の報告から再抽出 → 翌営業日ぶんを作り直して表示
   const reExtract = async () => {
     setBusy(true)
     try {
@@ -143,11 +130,8 @@ export default function SiteAssignmentsPage({ onBack }) {
       members: (edit.members || []).filter((m) => (m.name || '').trim()),
     }
     try {
-      if (edit.id) {
-        await axios.put(`${apiUrl}/api/site-assignments/${edit.id}`, body, authConfig())
-      } else {
-        await axios.post(`${apiUrl}/api/site-assignments`, { ...body, work_date: data.work_date }, authConfig())
-      }
+      if (edit.id) await axios.put(`${apiUrl}/api/site-assignments/${edit.id}`, body, authConfig())
+      else await axios.post(`${apiUrl}/api/site-assignments`, { ...body, work_date: data.work_date }, authConfig())
       setEdit(null)
       showToast('success', '保存しました')
       await load(data.work_date)
@@ -168,15 +152,13 @@ export default function SiteAssignmentsPage({ onBack }) {
   }
 
   const assignments = data.assignments || []
+  const colSpan = isAdmin ? 5 : 4
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-ink-950 transition-colors">
-      {/* ヘッダー */}
       <header className="bg-white/80 dark:bg-ink-900/80 backdrop-blur border-b border-slate-200 dark:border-ink-800 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={onBack}>
-            <ArrowLeft className="w-4 h-4" />戻る
-          </Button>
+          <Button variant="ghost" size="sm" onClick={onBack}><ArrowLeft className="w-4 h-4" />戻る</Button>
           <div className="flex items-center gap-2">
             <HardHat className="w-5 h-5 text-brand-500" />
             <h1 className="text-lg font-bold text-slate-900 dark:text-white">翌日の人員配置</h1>
@@ -196,17 +178,14 @@ export default function SiteAssignmentsPage({ onBack }) {
 
       <main className="max-w-5xl mx-auto px-6 py-8">
         {/* 日付ナビ＋サマリ */}
-        <div className="flex flex-wrap items-center gap-3 mb-6">
+        <div className="flex flex-wrap items-center gap-3 mb-5">
           <div className="flex items-center gap-1">
             <button onClick={goPrev} disabled={idx < 0 || idx >= dates.length - 1} aria-label="前の作業日"
               className="p-2 rounded-lg text-slate-500 hover:bg-slate-200 dark:hover:bg-ink-800 disabled:opacity-30">
               <ChevronLeft className="w-5 h-5" />
             </button>
-            <select
-              value={data.work_date || ''}
-              onChange={(e) => load(e.target.value)}
-              className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm font-bold text-slate-900 dark:text-white"
-            >
+            <select value={data.work_date || ''} onChange={(e) => load(e.target.value)}
+              className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm font-bold text-slate-900 dark:text-white">
               {dates.length === 0 && <option value="">—</option>}
               {dates.map((d) => <option key={d} value={d}>{fmtDate(d)}</option>)}
             </select>
@@ -221,8 +200,7 @@ export default function SiteAssignmentsPage({ onBack }) {
           </div>
           {isAdmin && data.work_date && (
             <div className="ml-auto">
-              <Button variant="secondary" size="sm"
-                onClick={() => setEdit({ site_name: '', work_content: '', members: [] })}>
+              <Button variant="secondary" size="sm" onClick={() => setEdit({ site_name: '', work_content: '', members: [] })}>
                 <Plus className="w-4 h-4" />現場を追加
               </Button>
             </div>
@@ -241,84 +219,103 @@ export default function SiteAssignmentsPage({ onBack }) {
             <p className="text-xs mt-1">グループLINEに翌日の報告が投稿され、夜20時に自動集計されます。</p>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {assignments.map((row) => (
-              <Card key={row.id} className="p-5">
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  <h3 className="font-bold text-slate-900 dark:text-white text-lg leading-snug">{row.site_name}</h3>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Badge tone="neutral">{row.member_count} 名</Badge>
-                    {row.edited && <Badge tone="warning">修正済</Badge>}
-                  </div>
-                </div>
-                {row.work_content && (
-                  <p className="text-sm text-slate-500 dark:text-slate-400 mb-3 whitespace-pre-wrap">{row.work_content}</p>
-                )}
-                <div className="flex flex-wrap gap-1.5">
-                  {(row.members || []).map((m, i) => <MemberChip key={i} m={m} />)}
-                </div>
-                <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100 dark:border-ink-700">
-                  <span className="text-xs text-slate-400">
-                    {row.source_sender ? `報告: ${row.source_sender}` : ''}
-                    {row.group_name ? ` ・ ${row.group_name}` : ''}
-                  </span>
-                  {isAdmin && (
-                    <div className="flex items-center gap-1">
-                      <button onClick={() => setEdit({ ...row, members: row.members || [] })}
-                        aria-label="編集" className="p-1.5 text-slate-400 hover:text-brand-500">
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => removeRow(row)}
-                        aria-label="削除" className="p-1.5 text-slate-400 hover:text-danger-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {row.raw_text && (
-                  <details className="mt-2">
-                    <summary className="text-xs text-slate-400 cursor-pointer hover:text-slate-600 dark:hover:text-slate-300">
-                      元のメッセージを表示
-                    </summary>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 whitespace-pre-wrap bg-slate-50 dark:bg-ink-800/60 rounded-lg p-2">
-                      {row.raw_text}
-                    </p>
-                  </details>
-                )}
-              </Card>
-            ))}
-          </div>
+          <Card className="overflow-hidden p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-ink-800/60 text-slate-500 dark:text-slate-400 text-left">
+                    <th className="px-4 py-3 font-semibold">現場</th>
+                    <th className="px-4 py-3 font-semibold">作業内容</th>
+                    <th className="px-4 py-3 font-semibold">人員</th>
+                    <th className="px-4 py-3 font-semibold text-right whitespace-nowrap">人数</th>
+                    {isAdmin && <th className="px-4 py-3 font-semibold text-right">操作</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-ink-700">
+                  {assignments.map((row) => (
+                    <Fragment key={row.id}>
+                      <tr className="align-top hover:bg-slate-50/60 dark:hover:bg-ink-800/30">
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => setExpanded(expanded === row.id ? null : row.id)}
+                            className="flex items-start gap-1 text-left font-bold text-slate-900 dark:text-white"
+                            title="元のメッセージを表示"
+                          >
+                            <ChevronDown className={`w-4 h-4 mt-0.5 shrink-0 text-slate-400 transition-transform ${expanded === row.id ? '' : '-rotate-90'}`} />
+                            <span>
+                              {row.site_name}
+                              {row.edited && <Badge tone="warning" className="ml-1 align-middle">修正済</Badge>}
+                            </span>
+                          </button>
+                          {row.source_sender && (
+                            <div className="text-xs text-slate-400 mt-1 pl-5">報告: {row.source_sender}</div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-pre-wrap min-w-[10rem]">
+                          {row.work_content || '—'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-1.5">
+                            {(row.members || []).map((m, i) => <MemberChip key={i} m={m} />)}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white tabular-nums whitespace-nowrap">
+                          {row.member_count}
+                        </td>
+                        {isAdmin && (
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-end gap-1">
+                              <button onClick={() => setEdit({ ...row, members: row.members || [] })} aria-label="編集"
+                                className="p-1.5 text-slate-400 hover:text-brand-500"><Pencil className="w-4 h-4" /></button>
+                              <button onClick={() => removeRow(row)} aria-label="削除"
+                                className="p-1.5 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                      {expanded === row.id && row.raw_text && (
+                        <tr className="bg-slate-50 dark:bg-ink-800/40">
+                          <td colSpan={colSpan} className="px-4 py-3">
+                            <p className="text-xs text-slate-500 dark:text-slate-400 whitespace-pre-wrap">
+                              <span className="font-semibold">元のメッセージ：</span>{'\n'}{row.raw_text}
+                            </p>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 dark:bg-ink-800/60 font-bold text-slate-900 dark:text-white">
+                    <td className="px-4 py-3" colSpan={colSpan - 2}>合計</td>
+                    <td className="px-4 py-3 text-right">{data.site_count} 現場</td>
+                    <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">延べ {data.total} 名</td>
+                    {isAdmin && <td />}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Card>
         )}
 
-        <p className="text-xs text-slate-400 dark:text-slate-500 mt-8 text-center">
-          グループLINEの夜の報告をAIが読み取って自動集計しています（毎晩20時締め）。
-          読み取り違いがあれば{isAdmin ? '各現場の編集ボタンから修正できます。' : '管理者に修正を依頼してください。'}
+        <p className="text-xs text-slate-400 dark:text-slate-500 mt-6">
+          グループLINEの夜の報告をAIが読み取り、社員名簿と照合して正式氏名で集計しています（毎晩20時締め）。
+          「?」付き・グレーの氏名は名簿と一致しなかった呼び名です。{isAdmin ? '各行の編集ボタンから修正できます。' : '修正は管理者へ。'}
         </p>
       </main>
 
-      {/* 編集／追加モーダル */}
       {edit && (
-        <ModalShell
-          title={edit.id ? '現場の人員を編集' : '現場を追加'}
-          onClose={() => setEdit(null)}
-        >
+        <ModalShell title={edit.id ? '現場の人員を編集' : '現場を追加'} onClose={() => setEdit(null)}>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">現場名</label>
-              <input
-                className="w-full rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm"
-                value={edit.site_name || ''}
-                onChange={(e) => setEdit({ ...edit, site_name: e.target.value })}
-              />
+              <input className="w-full rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm"
+                value={edit.site_name || ''} onChange={(e) => setEdit({ ...edit, site_name: e.target.value })} />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">作業内容</label>
-              <textarea
-                rows={2}
-                className="w-full rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm"
-                value={edit.work_content || ''}
-                onChange={(e) => setEdit({ ...edit, work_content: e.target.value })}
-              />
+              <textarea rows={2} className="w-full rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm"
+                value={edit.work_content || ''} onChange={(e) => setEdit({ ...edit, work_content: e.target.value })} />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">人員</label>
