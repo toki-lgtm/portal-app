@@ -65,10 +65,14 @@ function StaffNameInput({ value, staffOptions, onChange }) {
     }
   }, [])
 
-  const q = (value || '').trim()
-  // 入力が社員名そのものなら全件、部分入力なら絞り込み。空なら全件。
-  const isExact = staffOptions.includes(q)
-  const filtered = (!q || isExact) ? staffOptions : staffOptions.filter((n) => n.includes(q))
+  const qRaw = (value || '').trim()
+  const isExact = staffOptions.includes(qRaw)
+  // 敬称（さん/くん等）を外し、空白を無視して部分一致で絞り込む。
+  const norm = (s) => s.replace(/\s/g, '')
+  const q = norm(qRaw.replace(/(さん|くん|君|ちゃん|様|氏)$/,''))
+  let filtered = (!qRaw || isExact) ? staffOptions : staffOptions.filter((n) => norm(n).includes(q))
+  // 絞り込みで0件になったら全社員を出す（一覧が空で選べなくならないように）
+  if (!isExact && filtered.length === 0) filtered = staffOptions
 
   return (
     <div className="relative flex-1 min-w-0" ref={ref}>
