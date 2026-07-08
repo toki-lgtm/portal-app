@@ -8,6 +8,10 @@ import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
 import { InstrumentsTab, RiskTab, ScheduleTab, NearMissTab, SupplierTab } from './ISOTabs'
+import { AuditTab, CorrectiveTab, ReviewTab } from './ISOTab_Cycle'
+import { AccidentTab, ComplaintTab, SatisfactionTab } from './ISOTab_Records'
+import { EnvUsageTab, EnvAspectTab, FreonTab } from './ISOTab_Env'
+import { SelfInspectionTab, AlcoholTab, GoalTab, CommitteeTab } from './ISOTab_Ops'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
@@ -25,14 +29,39 @@ const RETENTIONS = ['更新まで', '3年', '5年', '7年', '永年', '退職ま
 const DEPTS = ['総務', '工事']
 const APPROVERS = ['社長', '専務', '部長']
 
-// F0では「台帳」タブのみ稼働。F1で測定機器/リスクアセス/スケジュールを追加予定。
-const TABS = [
-  { key: 'ledger', label: '文書記録台帳', ready: true },
-  { key: 'instruments', label: '測定機器', ready: true },
-  { key: 'risk', label: 'リスクアセス', ready: true },
-  { key: 'schedule', label: 'スケジュール', ready: true },
-  { key: 'nearmiss', label: 'ヒヤリハット', ready: true },
-  { key: 'suppliers', label: '供給者評価', ready: true },
+// 全19タブを6グループに分類（2段タブ：グループ選択→サブタブ）
+const GROUPS = [
+  { key: 'docs', label: '文書', tabs: [
+    { key: 'ledger', label: '文書記録台帳' },
+  ] },
+  { key: 'res', label: '力量・資源', tabs: [
+    { key: 'instruments', label: '測定機器' },
+    { key: 'suppliers', label: '供給者評価' },
+  ] },
+  { key: 'riskenv', label: 'リスク・環境', tabs: [
+    { key: 'risk', label: 'リスクアセス' },
+    { key: 'env-aspects', label: '環境側面' },
+    { key: 'env-usage', label: '環境使用量' },
+    { key: 'freon', label: 'フロン点検' },
+  ] },
+  { key: 'ops', label: '運用記録', tabs: [
+    { key: 'nearmiss', label: 'ヒヤリハット' },
+    { key: 'self-inspection', label: '自主検査' },
+    { key: 'alcohol', label: 'アルコールチェック' },
+    { key: 'accidents', label: '事故報告' },
+    { key: 'complaints', label: '苦情' },
+    { key: 'committee', label: '安全衛生委員会' },
+  ] },
+  { key: 'goal', label: '目標・満足度', tabs: [
+    { key: 'goals', label: '目標達成計画' },
+    { key: 'satisfaction', label: '顧客満足度' },
+  ] },
+  { key: 'audit', label: '監査・レビュー', tabs: [
+    { key: 'schedule', label: 'スケジュール' },
+    { key: 'audit', label: '内部監査' },
+    { key: 'corrective', label: '是正処置' },
+    { key: 'review', label: 'マネジメントレビュー' },
+  ] },
 ]
 
 const inputCls =
@@ -105,24 +134,40 @@ export default function ISOPage({ onBack }) {
             <span className="hidden sm:inline text-xs text-slate-400">9001 / 45001 / 14001 統合MS</span>
           </div>
         </div>
-        {/* タブ */}
-        <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto">
-          {TABS.map((t) => (
+        {/* グループ（1段目） */}
+        <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto pt-1">
+          {GROUPS.map((g) => {
+            const active = g.tabs.some((t) => t.key === tab)
+            return (
+              <button
+                key={g.key}
+                type="button"
+                onClick={() => setTab(g.tabs[0].key)}
+                className={`px-3 py-1.5 text-xs font-bold rounded-t-lg whitespace-nowrap transition ${
+                  active
+                    ? 'bg-slate-100 dark:bg-ink-950 text-brand-600 dark:text-brand-400'
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                }`}
+              >
+                {g.label}
+              </button>
+            )
+          })}
+        </div>
+        {/* サブタブ（2段目） */}
+        <div className="max-w-7xl mx-auto px-6 flex gap-1 overflow-x-auto border-t border-slate-100 dark:border-ink-800">
+          {(GROUPS.find((g) => g.tabs.some((t) => t.key === tab)) || GROUPS[0]).tabs.map((t) => (
             <button
               key={t.key}
               type="button"
-              disabled={!t.ready}
-              onClick={() => t.ready && setTab(t.key)}
+              onClick={() => setTab(t.key)}
               className={`px-4 py-2 text-sm font-semibold border-b-2 whitespace-nowrap transition ${
                 tab === t.key
                   ? 'border-brand-500 text-brand-600 dark:text-brand-400'
-                  : t.ready
-                  ? 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                  : 'border-transparent text-slate-300 dark:text-slate-600 cursor-not-allowed'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
             >
               {t.label}
-              {!t.ready && <span className="ml-1 text-[10px]">近日</span>}
             </button>
           ))}
         </div>
@@ -136,6 +181,19 @@ export default function ISOPage({ onBack }) {
         {tab === 'schedule' && <ScheduleTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'nearmiss' && <NearMissTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'suppliers' && <SupplierTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'audit' && <AuditTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'corrective' && <CorrectiveTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'review' && <ReviewTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'accidents' && <AccidentTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'complaints' && <ComplaintTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'satisfaction' && <SatisfactionTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'env-usage' && <EnvUsageTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'env-aspects' && <EnvAspectTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'freon' && <FreonTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'self-inspection' && <SelfInspectionTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'alcohol' && <AlcoholTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'goals' && <GoalTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'committee' && <CommitteeTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'ledger' && (loading ? (
           <div className="text-center py-20">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" />
