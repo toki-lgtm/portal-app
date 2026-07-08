@@ -67,19 +67,23 @@ export default function LibraryPage({ onBack }) {
     loadList(index === 0 ? null : target.id)
   }
 
-  // ファイルを開く（短命URLを取得して新規タブで表示）。ポップアップブロック回避のため先に空タブを開く。
-  const openFile = async (item) => {
+  // ファイルをダウンロード（短命URLを取得し attachment 配信をアンカーで保存）。
+  //   ブラウザ内表示は端末/ビューア依存で不安定なため、保存する形にしている。
+  const downloadFile = async (item) => {
     setOpening(item.id)
-    const w = window.open('', '_blank')
     try {
       const res = await axios.get(`${apiUrl}/api/library/file/${item.id}/url`, authConfig())
       const url = res.data?.url
       if (!url) throw new Error('URLの取得に失敗しました')
-      if (w) w.location = url
-      else window.location.href = url
+      const a = document.createElement('a')
+      a.href = url
+      a.download = item.name || '' // サーバの Content-Disposition が正式なファイル名を付与する
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
     } catch (e) {
-      if (w) w.close()
-      showToast('error', e.response?.data?.error || 'ファイルを開けませんでした')
+      showToast('error', e.response?.data?.error || 'ダウンロードに失敗しました')
     } finally {
       setOpening(null)
     }
@@ -212,7 +216,7 @@ export default function LibraryPage({ onBack }) {
               <Card
                 key={item.id}
                 className="p-4 flex items-center gap-3 group hover:shadow-md transition cursor-pointer"
-                onClick={() => (item.isFolder ? openFolder(item) : openFile(item))}
+                onClick={() => (item.isFolder ? openFolder(item) : downloadFile(item))}
               >
                 <div className="shrink-0">
                   {item.isFolder ? (
@@ -228,7 +232,7 @@ export default function LibraryPage({ onBack }) {
                     {item.name}
                   </p>
                   <p className="text-xs text-slate-400 dark:text-slate-500">
-                    {item.isFolder ? 'フォルダ' : opening === item.id ? '開いています…' : 'タップして開く'}
+                    {item.isFolder ? 'フォルダ' : opening === item.id ? '準備中…' : 'タップして保存'}
                   </p>
                 </div>
                 {isAdmin && (
