@@ -12,6 +12,7 @@ import { AuditTab, CorrectiveTab, ReviewTab } from './ISOTab_Cycle'
 import { AccidentTab, ComplaintTab, SatisfactionTab } from './ISOTab_Records'
 import { EnvUsageTab, EnvAspectTab, FreonTab } from './ISOTab_Env'
 import { SelfInspectionTab, AlcoholTab, GoalTab, CommitteeTab } from './ISOTab_Ops'
+import PeriodicTab from './ISOTab_Periodic'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
@@ -29,8 +30,11 @@ const RETENTIONS = ['更新まで', '3年', '5年', '7年', '永年', '退職ま
 const DEPTS = ['総務', '工事']
 const APPROVERS = ['社長', '専務', '部長']
 
-// 全19タブを6グループに分類（2段タブ：グループ選択→サブタブ）
+// 2段タブ：グループ選択→サブタブ。先頭「定期記入」は毎日/毎月の記入状況ダッシュボード。
 const GROUPS = [
+  { key: 'periodic', label: '定期記入', tabs: [
+    { key: 'periodic', label: '今日・今月の記入' },
+  ] },
   { key: 'docs', label: '文書', tabs: [
     { key: 'ledger', label: '文書記録台帳' },
   ] },
@@ -68,7 +72,7 @@ const inputCls =
   'w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500'
 
 export default function ISOPage({ onBack }) {
-  const [tab, setTab] = useState('ledger')
+  const [tab, setTab] = useState('periodic')
   const [docs, setDocs] = useState([])
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -176,6 +180,7 @@ export default function ISOPage({ onBack }) {
       {toast && <Toast toast={toast} />}
 
       <main className="max-w-7xl mx-auto px-6 py-6">
+        {tab === 'periodic' && <PeriodicTab isAdmin={isAdmin} showToast={showToast} onJump={setTab} />}
         {tab === 'instruments' && <InstrumentsTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'risk' && <RiskTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'schedule' && <ScheduleTab isAdmin={isAdmin} showToast={showToast} />}
