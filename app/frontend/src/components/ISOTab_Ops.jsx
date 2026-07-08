@@ -585,6 +585,9 @@ export function GoalTab({ isAdmin, showToast }) {
   const [progress, setProgress] = useState({}) // { [goalId]: rows }
   const [open, setOpen] = useState({}) // { [goalId]: bool }
   const [modal, setModal] = useState(null) // {goalId}
+  const [genMonth, setGenMonth] = useState(thisMonth())
+  const [gen, setGen] = useState(false)
+  const [batch, setBatch] = useState(null) // {month, rows}
 
   const load = useCallback(async () => {
     try {
@@ -610,6 +613,16 @@ export function GoalTab({ isAdmin, showToast }) {
     [goals]
   )
 
+  const generate = async () => {
+    setGen(true)
+    try {
+      const r = await axios.get(`${apiUrl}/api/iso/goals/progress-draft`, { params: { month: genMonth }, ...authConfig() })
+      if (!r.data.rows?.length) { showToast('error', `${r.data.fiscal_year}年度の目標が登録されていません`); return }
+      setBatch({ month: genMonth, rows: r.data.rows })
+    } catch (e) { showToast('error', e.response?.data?.error || 'ドラフト生成に失敗しました') }
+    finally { setGen(false) }
+  }
+
   if (goals === null) return <Loading />
 
   return (
@@ -626,6 +639,20 @@ export function GoalTab({ isAdmin, showToast }) {
           </div>
         )}
       </div>
+
+      {isAdmin && (
+        <Card className="p-3 mb-4 flex flex-wrap items-center gap-2 border-2 border-brand-200 dark:border-brand-500/30">
+          <span className="text-sm font-bold text-slate-900 dark:text-white">月次進捗の自動生成</span>
+          <span className="text-xs text-slate-400">対象年度の全目標ぶんを既定文＋実ヒヤリ件数で下書き → 確認して記録</span>
+          <div className="ml-auto flex items-center gap-2">
+            <input type="month" className={`${inputCls} w-auto`} value={genMonth} onChange={(e) => setGenMonth(e.target.value)} />
+            <Button variant="primary" size="sm" onClick={generate} disabled={gen}>
+              {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}この月を生成
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <div className="space-y-3">
         {goals.map((g) => {
           const rows = progress[g.id] || []
@@ -683,7 +710,58 @@ export function GoalTab({ isAdmin, showToast }) {
       </div>
 
       {modal && <GoalProgressModal goalId={modal.goalId} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
+      {batch && <GoalProgressBatchModal month={batch.month} initialRows={batch.rows} onClose={() => setBatch(null)} onSaved={() => { setBatch(null); load() }} showToast={showToast} />}
     </>
+  )
+}
+
+// 月次進捗を全目標まとめて確認・記録するモーダル（アルコールの一括記録と同型）
+function GoalProgressBatchModal({ month, initialRows, onClose, onSaved, showToast }) {
+  const [rows, setRows] = useState(initialRows)
+  const [saving, setSaving] = useState(false)
+  const setRow = (i, k, v) => setRows((p) => p.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)))
+  const targets = rows.filter((r) => !r.already_recorded)
+
+  const submit = async () => {
+    const payload = targets.map((r) => ({ goal_id: r.goal_id, ym: r.ym, result: r.result, evaluation: r.evaluation, evaluator: r.evaluator }))
+    if (payload.length === 0) { showToast('error', 'この月は全目標が記録済みです'); return }
+    setSaving(true)
+    try {
+      const r = await axios.post(`${apiUrl}/api/iso/goals/progress-batch`, { rows: payload }, authConfig())
+      showToast('success', `${r.data.inserted}件を記録しました${r.data.skipped ? `（既存${r.data.skipped}件はスキップ）` : ''}`)
+      onSaved()
+    } catch (e) { showToast('error', e.response?.data?.error || '記録に失敗しました') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={`${month} の月次進捗をまとめて記録`} onClose={onClose} wide>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">内容を確認・修正してから記録してください。「記録済み」の目標は対象外です（重複は作りません）。</p>
+      <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+        {rows.map((r, i) => (
+          <div key={r.goal_id} className={`p-3 rounded-lg border ${r.already_recorded ? 'border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-900/40 opacity-60' : 'border-slate-200 dark:border-ink-700'}`}>
+            <div className="flex items-center gap-2 mb-2">
+              <Badge tone={GOAL_CATEGORY_TONE[r.category] || 'neutral'}>{r.category}</Badge>
+              <span className="font-semibold text-sm text-slate-900 dark:text-white">{r.title}</span>
+              {r.already_recorded && <span className="ml-auto text-xs font-semibold text-success-500">記録済み</span>}
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <Field label="結果"><textarea className={inputCls} rows={2} disabled={r.already_recorded} value={r.result || ''} onChange={(e) => setRow(i, 'result', e.target.value)} /></Field>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="sm:col-span-2"><Field label="評価"><textarea className={inputCls} rows={2} disabled={r.already_recorded} value={r.evaluation || ''} onChange={(e) => setRow(i, 'evaluation', e.target.value)} /></Field></div>
+                <Field label="評価者"><input className={inputCls} disabled={r.already_recorded} value={r.evaluator || ''} onChange={(e) => setRow(i, 'evaluator', e.target.value)} /></Field>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>キャンセル</Button>
+        <Button variant="primary" onClick={submit} disabled={saving || targets.length === 0}>
+          {saving && <Loader2 className="w-4 h-4 animate-spin" />}確認して {targets.length}件を記録
+        </Button>
+      </div>
+    </ModalShell>
   )
 }
 
@@ -723,13 +801,25 @@ function GoalProgressModal({ goalId, onClose, onSaved, showToast }) {
 export function CommitteeTab({ isAdmin, showToast }) {
   const [rows, setRows] = useState(null)
   const [detail, setDetail] = useState(null) // row
-  const [modal, setModal] = useState(null) // {row?, copyFrom?}
+  const [modal, setModal] = useState(null) // {row?, copyFrom?, draft?}
+  const [genMonth, setGenMonth] = useState(thisMonth())
+  const [gen, setGen] = useState(false)
 
   const load = useCallback(async () => {
     try { const r = await axios.get(`${apiUrl}/api/iso/safety-committee`, authConfig()); setRows(r.data || []) }
     catch { showToast('error', '安全衛生委員会の記録取得に失敗しました'); setRows([]) }
   }, [showToast])
   useEffect(() => { load() }, [load])
+
+  const generate = async () => {
+    setGen(true)
+    try {
+      const r = await axios.get(`${apiUrl}/api/iso/safety-committee/draft`, { params: { month: genMonth }, ...authConfig() })
+      if (r.data.already_recorded && !window.confirm(`${genMonth} の議事録は既にあります。別途 下書きを作成しますか？`)) return
+      setModal({ draft: r.data.draft })
+    } catch (e) { showToast('error', e.response?.data?.error || 'ドラフト生成に失敗しました') }
+    finally { setGen(false) }
+  }
 
   const sorted = useMemo(() => rows === null ? [] : [...rows].sort((a, b) => (b.meeting_date || '').localeCompare(a.meeting_date || '')), [rows])
   const latest = sorted[0]
@@ -741,9 +831,13 @@ export function CommitteeTab({ isAdmin, showToast }) {
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <p className="text-sm text-slate-500 dark:text-slate-400">月次の安全衛生委員会 議事録</p>
         {isAdmin && (
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <input type="month" className={`${inputCls} w-auto`} value={genMonth} onChange={(e) => setGenMonth(e.target.value)} />
+            <Button variant="primary" size="sm" onClick={generate} disabled={gen}>
+              {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}ドラフト生成
+            </Button>
             {latest && <Button variant="secondary" size="sm" onClick={() => setModal({ copyFrom: latest })}><Copy className="w-4 h-4" />前回からコピー</Button>}
-            <Button variant="primary" size="sm" onClick={() => setModal({})}><Plus className="w-4 h-4" />議事録を追加</Button>
+            <Button variant="secondary" size="sm" onClick={() => setModal({})}><Plus className="w-4 h-4" />空で追加</Button>
           </div>
         )}
       </div>
@@ -773,7 +867,7 @@ export function CommitteeTab({ isAdmin, showToast }) {
       </div>
 
       {detail && <CommitteeDetailModal row={detail} onClose={() => setDetail(null)} />}
-      {modal && <CommitteeEditModal row={modal.row} copyFrom={modal.copyFrom} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
+      {modal && <CommitteeEditModal row={modal.row} copyFrom={modal.copyFrom} draft={modal.draft} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
     </>
   )
 }
@@ -803,15 +897,16 @@ function CommitteeDetailModal({ row, onClose }) {
   )
 }
 
-function CommitteeEditModal({ row, copyFrom, onClose, onSaved, showToast }) {
+function CommitteeEditModal({ row, copyFrom, draft, onClose, onSaved, showToast }) {
   const isNew = !row
-  const base = row || copyFrom
+  const seed = row || draft              // 内容フィールドの種（下書き含む）
+  const base = row || draft || copyFrom  // ヘッダ系（場所・議長・出席者）の種
   const [form, setForm] = useState({
-    meeting_date: row?.meeting_date || today(),
+    meeting_date: seed?.meeting_date || today(),
     location: base?.location || '', chair: base?.chair || '', attendees: base?.attendees || '',
-    accident_count: row?.accident_count ?? 0, ky_report: row?.ky_report || '', patrol_result: row?.patrol_result || '',
-    notes: row?.notes || '', discussion: row?.discussion || '', next_date: row?.next_date || '',
-    summary_by: base?.summary_by || '', summary: row?.summary || '',
+    accident_count: seed?.accident_count ?? 0, ky_report: seed?.ky_report || '', patrol_result: seed?.patrol_result || '',
+    notes: seed?.notes || '', discussion: seed?.discussion || '', next_date: seed?.next_date || '',
+    summary_by: base?.summary_by || '', summary: seed?.summary || '',
   })
   const [saving, setSaving] = useState(false)
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
@@ -829,7 +924,7 @@ function CommitteeEditModal({ row, copyFrom, onClose, onSaved, showToast }) {
   }
 
   return (
-    <ModalShell title={isNew ? (copyFrom ? '議事録を追加（前回からコピー）' : '議事録を追加') : '議事録を編集'} onClose={onClose} wide>
+    <ModalShell title={isNew ? (draft ? '議事録を追加（今月のドラフト）' : copyFrom ? '議事録を追加（前回からコピー）' : '議事録を追加') : '議事録を編集'} onClose={onClose} wide>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="開催日 *"><input type="date" className={inputCls} value={form.meeting_date} onChange={(e) => set('meeting_date', e.target.value)} /></Field>
         <Field label="次回開催日"><input type="date" className={inputCls} value={form.next_date} onChange={(e) => set('next_date', e.target.value)} /></Field>
