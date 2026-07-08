@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import axios from 'axios'
-import { Loader2, Plus, Pencil, Trash2, PackageCheck, PackageOpen, Wrench, CheckCircle2 } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, PackageCheck, PackageOpen, Wrench, CheckCircle2, AlertTriangle } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
@@ -427,4 +427,288 @@ function ScheduleModal({ row, onClose, onSaved, showToast }) {
 
 function Loading() {
   return <div className="text-center py-16"><Loader2 className="w-7 h-7 animate-spin mx-auto text-brand-500" /></div>
+}
+
+// ══════════════ ヒヤリハットタブ ══════════════
+const NM_CATEGORIES = ['転倒', '墜落・転落', '挟まれ・巻き込まれ', '飛来・落下', '交通', '感電', 'その他']
+const NM_MONTHLY_TARGET = 30
+
+export function NearMissTab({ isAdmin, showToast }) {
+  const [rows, setRows] = useState(null)
+  const [modal, setModal] = useState(null)
+
+  const load = useCallback(async () => {
+    try { const r = await axios.get(`${apiUrl}/api/iso/near-misses`, authConfig()); setRows(r.data || []) }
+    catch { showToast('error', 'ヒヤリハットの取得に失敗しました'); setRows([]) }
+  }, [showToast])
+  useEffect(() => { load() }, [load])
+
+  const thisMonth = useMemo(() => {
+    if (!rows) return 0
+    const ym = today().slice(0, 7)
+    return rows.filter((r) => (r.report_date || '').startsWith(ym)).length
+  }, [rows])
+
+  const del = async (id) => {
+    try { await axios.delete(`${apiUrl}/api/iso/near-misses/${id}`, authConfig()); showToast('success', '削除しました'); load() }
+    catch (e) { showToast('error', e.response?.data?.error || '削除に失敗しました') }
+  }
+
+  if (rows === null) return <Loading />
+  const pct = Math.min(100, Math.round((thisMonth / NM_MONTHLY_TARGET) * 100))
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <Card className="p-4 flex-1 min-w-[220px]">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400">今月の報告</p>
+            <span className="text-xs text-slate-400">目標 {NM_MONTHLY_TARGET}件/月</span>
+          </div>
+          <p className="text-2xl font-bold text-slate-900 dark:text-white">{thisMonth}<span className="text-sm font-normal text-slate-400"> / {NM_MONTHLY_TARGET}件</span></p>
+          <div className="mt-2 h-2 rounded-full bg-slate-200 dark:bg-ink-700 overflow-hidden">
+            <div className={`h-full ${pct >= 100 ? 'bg-success-500' : 'bg-brand-500'}`} style={{ width: `${pct}%` }} />
+          </div>
+        </Card>
+        <Button variant="primary" onClick={() => setModal({})}><Plus className="w-4 h-4" />ヒヤリハットを報告</Button>
+      </div>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">気づいた「ヒヤリ」「ハッと」を全員で共有（誰でも報告できます）。</p>
+
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <Card key={r.id} className="p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap text-xs text-slate-500 dark:text-slate-400">
+                  <span>{r.report_date}</span>
+                  {r.category && <Badge tone="warning">{r.category}</Badge>}
+                  {r.site_name && <span>📍{r.site_name}</span>}
+                  {r.reporter && <span>👤{r.reporter}</span>}
+                </div>
+                <p className="text-slate-900 dark:text-white mt-1">{r.content}</p>
+                {(r.cause || r.measure) && (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    {r.cause && <>原因: {r.cause}　</>}{r.measure && <>対策: {r.measure}</>}
+                  </p>
+                )}
+              </div>
+              {isAdmin && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button title="編集" onClick={() => setModal({ row: r })} className="p-1 text-slate-400 hover:text-brand-500"><Pencil className="w-4 h-4" /></button>
+                  <button title="削除" onClick={() => del(r.id)} className="p-1 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
+                </div>
+              )}
+            </div>
+          </Card>
+        ))}
+        {rows.length === 0 && <p className="text-center text-slate-400 py-10">まだ報告がありません</p>}
+      </div>
+
+      {modal && <NearMissModal row={modal.row} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
+    </>
+  )
+}
+
+function NearMissModal({ row, onClose, onSaved, showToast }) {
+  const isNew = !row
+  const [form, setForm] = useState({
+    report_date: row?.report_date || today(), reporter: row?.reporter || '', site_name: row?.site_name || '',
+    category: row?.category || '', content: row?.content || '', cause: row?.cause || '', measure: row?.measure || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const submit = async () => {
+    if (!form.content.trim()) { showToast('error', '内容は必須です'); return }
+    setSaving(true)
+    try {
+      if (isNew) { await axios.post(`${apiUrl}/api/iso/near-misses`, form, authConfig()); showToast('success', '報告しました。ありがとうございます') }
+      else { await axios.put(`${apiUrl}/api/iso/near-misses/${row.id}`, form, authConfig()); showToast('success', '更新しました') }
+      onSaved()
+    } catch (e) { showToast('error', e.response?.data?.error || '保存に失敗しました') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={isNew ? 'ヒヤリハットを報告' : 'ヒヤリハットを編集'} onClose={onClose} wide>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="発生日"><input type="date" className={inputCls} value={form.report_date} onChange={(e) => set('report_date', e.target.value)} /></Field>
+        <Field label="報告者"><input className={inputCls} value={form.reporter} onChange={(e) => set('reporter', e.target.value)} /></Field>
+        <Field label="現場・場所"><input className={inputCls} value={form.site_name} onChange={(e) => set('site_name', e.target.value)} /></Field>
+        <Field label="種別">
+          <select className={inputCls} value={form.category} onChange={(e) => set('category', e.target.value)}>
+            <option value="">選択</option>
+            {NM_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <div className="sm:col-span-2"><Field label="内容 *" hint="どんなヒヤリ・ハットか"><textarea className={inputCls} rows={2} value={form.content} onChange={(e) => set('content', e.target.value)} /></Field></div>
+        <Field label="推定原因"><input className={inputCls} value={form.cause} onChange={(e) => set('cause', e.target.value)} /></Field>
+        <Field label="対策・気づき"><input className={inputCls} value={form.measure} onChange={(e) => set('measure', e.target.value)} /></Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>キャンセル</Button>
+        <Button variant="primary" onClick={submit} disabled={saving}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}{isNew ? '報告する' : '保存'}</Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ══════════════ 供給者評価タブ ══════════════
+const SUP_CRITERIA = {
+  '原料供給・保守': { keys: ['品質', '価格', '納期', '納品', '休日対応'], pass: 3 },
+  '請負委託': { keys: ['品質', '価格', '納期', '安全配慮', '組織力', '保有設備・工具', '事務対応'], pass: 5 },
+}
+const MARKS = ['○', '×', 'ー']
+
+export function SupplierTab({ isAdmin, showToast }) {
+  const [rows, setRows] = useState(null)
+  const [cat, setCat] = useState('')
+  const [modal, setModal] = useState(null)
+
+  const load = useCallback(async () => {
+    try { const r = await axios.get(`${apiUrl}/api/iso/suppliers`, authConfig()); setRows(r.data || []) }
+    catch { showToast('error', '供給者評価の取得に失敗しました'); setRows([]) }
+  }, [showToast])
+  useEffect(() => { load() }, [load])
+
+  const filtered = useMemo(() => rows === null ? [] : rows.filter((r) => !cat || r.trade_category === cat), [rows, cat])
+
+  if (rows === null) return <Loading />
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <p className="text-sm text-slate-500 dark:text-slate-400">協力会社を評価項目○×で判定（原料=○3以上／請負=○5以上で合格）</p>
+        <select value={cat} onChange={(e) => setCat(e.target.value)} className={`${inputCls} w-auto`}>
+          <option value="">区分: すべて</option>
+          {Object.keys(SUP_CRITERIA).map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <span className="text-xs text-slate-400">{filtered.length}社</span>
+        {isAdmin && <Button variant="primary" size="sm" className="ml-auto" onClick={() => setModal({})}><Plus className="w-4 h-4" />追加</Button>}
+      </div>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-ink-700">
+                <th className="px-3 py-2 font-semibold">供給者</th>
+                <th className="px-3 py-2 font-semibold">取引品目</th>
+                <th className="px-3 py-2 font-semibold">評価項目</th>
+                <th className="px-3 py-2 font-semibold text-center">判定</th>
+                <th className="px-3 py-2 font-semibold">評価日</th>
+                {isAdmin && <th className="px-3 py-2 font-semibold text-center">操作</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r) => (
+                <tr key={r.id} className="border-b border-slate-100 dark:border-ink-800 hover:bg-slate-50 dark:hover:bg-ink-900/50">
+                  <td className="px-3 py-2 font-medium text-slate-900 dark:text-white align-top whitespace-nowrap">{r.supplier_name}</td>
+                  <td className="px-3 py-2 align-top text-slate-600 dark:text-slate-300">{r.main_item}</td>
+                  <td className="px-3 py-2 align-top">
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(r.criteria || {}).map(([k, v]) => (
+                        <span key={k} className={`text-[11px] px-1.5 py-0.5 rounded ${v === '○' ? 'bg-success-100 text-success-700 dark:bg-success-500/15 dark:text-success-400' : v === '×' ? 'bg-danger-100 text-danger-700 dark:bg-danger-500/15 dark:text-danger-400' : 'bg-slate-100 text-slate-500 dark:bg-ink-700'}`}>{k}{v}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-top text-center"><Badge tone={r.result === '合格' ? 'success' : r.result === '不合格' ? 'danger' : 'warning'}>{r.result || '未'}</Badge></td>
+                  <td className="px-3 py-2 align-top text-xs text-slate-400 whitespace-nowrap">{r.evaluation_date || '—'}</td>
+                  {isAdmin && (
+                    <td className="px-3 py-2 align-top text-center">
+                      <button title="評価" onClick={() => setModal({ row: r })} className="p-1 text-slate-400 hover:text-brand-500"><Pencil className="w-4 h-4" /></button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {filtered.length === 0 && <tr><td colSpan={isAdmin ? 6 : 5} className="px-3 py-10 text-center text-slate-400">該当データがありません</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {modal && <SupplierModal row={modal.row} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
+    </>
+  )
+}
+
+function SupplierModal({ row, onClose, onSaved, showToast }) {
+  const isNew = !row
+  const [category, setCategory] = useState(row?.trade_category || '原料供給・保守')
+  const spec = SUP_CRITERIA[category]
+  const [form, setForm] = useState(() => ({
+    supplier_name: row?.supplier_name || '', main_item: row?.main_item || '',
+    criteria: row?.criteria && Object.keys(row.criteria).length ? { ...row.criteria } : Object.fromEntries(SUP_CRITERIA[row?.trade_category || '原料供給・保守'].keys.map((k) => [k, '○'])),
+    evaluator: row?.evaluator || '', evaluation_date: row?.evaluation_date || today(), reason: row?.reason || '',
+  }))
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  // 区分変更時は評価項目を作り直す
+  const changeCategory = (c) => {
+    setCategory(c)
+    setForm((p) => ({ ...p, criteria: Object.fromEntries(SUP_CRITERIA[c].keys.map((k) => [k, p.criteria[k] || '○'])) }))
+  }
+  const setMark = (k, v) => setForm((p) => ({ ...p, criteria: { ...p.criteria, [k]: v } }))
+
+  const okCount = Object.values(form.criteria).filter((v) => v === '○').length
+  const result = okCount >= spec.pass ? '合格' : '不合格'
+
+  const submit = async () => {
+    if (!form.supplier_name.trim()) { showToast('error', '供給者名は必須です'); return }
+    const payload = { ...form, trade_category: category, result }
+    setSaving(true)
+    try {
+      if (isNew) { await axios.post(`${apiUrl}/api/iso/suppliers`, payload, authConfig()); showToast('success', '追加しました') }
+      else { await axios.put(`${apiUrl}/api/iso/suppliers/${row.id}`, payload, authConfig()); showToast('success', '更新しました') }
+      onSaved()
+    } catch (e) { showToast('error', e.response?.data?.error || '保存に失敗しました') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={isNew ? '供給者を評価' : `評価：${row.supplier_name}`} onClose={onClose} wide>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="供給者名 *"><input className={inputCls} value={form.supplier_name} onChange={(e) => set('supplier_name', e.target.value)} /></Field>
+        <Field label="取引区分">
+          <select className={inputCls} value={category} onChange={(e) => changeCategory(e.target.value)}>
+            {Object.keys(SUP_CRITERIA).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <div className="sm:col-span-2"><Field label="主要取引品目"><input className={inputCls} value={form.main_item} onChange={(e) => set('main_item', e.target.value)} /></Field></div>
+      </div>
+
+      <div className="mt-4">
+        <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 mb-2">評価項目（○が{spec.pass}以上で合格）</p>
+        <div className="space-y-1.5">
+          {spec.keys.map((k) => (
+            <div key={k} className="flex items-center gap-2">
+              <span className="text-sm text-slate-700 dark:text-slate-200 w-32 shrink-0">{k}</span>
+              <div className="flex gap-1">
+                {MARKS.map((m) => (
+                  <button key={m} type="button" onClick={() => setMark(k, m)}
+                    className={`w-9 h-8 rounded-lg text-sm font-bold border transition ${form.criteria[k] === m ? 'bg-brand-500 text-white border-brand-500' : 'border-slate-300 dark:border-ink-600 text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-700'}`}>{m}</button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-sm text-slate-500 dark:text-slate-400">○ {okCount}個 →</span>
+          <Badge tone={result === '合格' ? 'success' : 'danger'}>{result}</Badge>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+        <Field label="評価者"><input className={inputCls} value={form.evaluator} onChange={(e) => set('evaluator', e.target.value)} /></Field>
+        <Field label="評価日"><input type="date" className={inputCls} value={form.evaluation_date} onChange={(e) => set('evaluation_date', e.target.value)} /></Field>
+        {result === '不合格' && <div className="sm:col-span-2"><Field label="選択理由（例外的に合格とする場合等）"><input className={inputCls} value={form.reason} onChange={(e) => set('reason', e.target.value)} /></Field></div>}
+      </div>
+
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>キャンセル</Button>
+        <Button variant="primary" onClick={submit} disabled={saving}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}保存</Button>
+      </div>
+    </ModalShell>
+  )
 }

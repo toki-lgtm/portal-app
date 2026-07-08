@@ -7,7 +7,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { InstrumentsTab, RiskTab, ScheduleTab } from './ISOTabs'
+import { InstrumentsTab, RiskTab, ScheduleTab, NearMissTab, SupplierTab } from './ISOTabs'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
@@ -31,6 +31,8 @@ const TABS = [
   { key: 'instruments', label: '測定機器', ready: true },
   { key: 'risk', label: 'リスクアセス', ready: true },
   { key: 'schedule', label: 'スケジュール', ready: true },
+  { key: 'nearmiss', label: 'ヒヤリハット', ready: true },
+  { key: 'suppliers', label: '供給者評価', ready: true },
 ]
 
 const inputCls =
@@ -132,6 +134,8 @@ export default function ISOPage({ onBack }) {
         {tab === 'instruments' && <InstrumentsTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'risk' && <RiskTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'schedule' && <ScheduleTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'nearmiss' && <NearMissTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'suppliers' && <SupplierTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'ledger' && (loading ? (
           <div className="text-center py-20">
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" />
