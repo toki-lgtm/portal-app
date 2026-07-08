@@ -319,6 +319,158 @@ function RiskModal({ row, locs, onClose, onSaved, showToast }) {
   )
 }
 
+// ══════════════ 関連法令規制一覧・順守評価表タブ（096：6.1/9.1）══════════════
+const LAW_CATEGORIES = ['品質', '環境', '労働安全衛生']
+const LAW_CAT_TONE = { 品質: 'info', 環境: 'success', 労働安全衛生: 'warning' }
+// 順守評価バッジの色分け
+function complianceTone(v) {
+  const s = String(v || '').trim()
+  if (!s) return { tone: 'neutral', label: '未評価' }
+  if (s.includes('不適合') || s.includes('違反')) return { tone: 'danger', label: s }
+  if (s.includes('保留') || s.includes('対応') || s.includes('課題')) return { tone: 'warning', label: s }
+  return { tone: 'success', label: s }
+}
+
+export function LawsTab({ isAdmin, showToast }) {
+  const [rows, setRows] = useState(null)
+  const [catFilter, setCatFilter] = useState('')
+  const [modal, setModal] = useState(null)
+
+  const load = useCallback(async () => {
+    try { const r = await axios.get(`${apiUrl}/api/iso/laws-regulations`, authConfig()); setRows(r.data || []) }
+    catch { showToast('error', '関連法令一覧の取得に失敗しました'); setRows([]) }
+  }, [showToast])
+  useEffect(() => { load() }, [load])
+
+  const filtered = useMemo(() => rows === null ? [] : rows.filter((r) => !catFilter || r.category === catFilter), [rows, catFilter])
+
+  const del = async (id) => {
+    try { await axios.delete(`${apiUrl}/api/iso/laws-regulations/${id}`, authConfig()); showToast('success', '削除しました'); load() }
+    catch (e) { showToast('error', e.response?.data?.error || '削除に失敗しました') }
+  }
+
+  if (rows === null) return <Loading />
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <p className="text-sm text-slate-500 dark:text-slate-400">適用法令・規格・その他要求事項と当社の遵守事項・順守評価（6.1／9.1）</p>
+        <select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={`${inputCls} w-auto`}>
+          <option value="">区分: すべて</option>
+          {LAW_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        {isAdmin && <Button variant="primary" size="sm" className="ml-auto" onClick={() => setModal({})}><Plus className="w-4 h-4" />追加</Button>}
+      </div>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-ink-700">
+                <th className="px-3 py-2 font-semibold">区分</th>
+                <th className="px-3 py-2 font-semibold">法令・規制</th>
+                <th className="px-3 py-2 font-semibold">要求事項</th>
+                <th className="px-3 py-2 font-semibold">当社が遵守すべき事項</th>
+                <th className="px-3 py-2 font-semibold">責任部門</th>
+                <th className="px-3 py-2 font-semibold">関係記録</th>
+                <th className="px-3 py-2 font-semibold text-center">順守評価</th>
+                {isAdmin && <th className="px-3 py-2 font-semibold text-center">操作</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, i) => {
+                // 同一法令名が続く場合は法令名セルを空欄にして視覚的にまとめる（原本の結合セルを再現）
+                const sameAsPrev = i > 0 && filtered[i - 1].law_name === r.law_name && filtered[i - 1].category === r.category
+                const cs = complianceTone(r.compliance_status)
+                return (
+                  <tr key={r.id} className="border-b border-slate-100 dark:border-ink-800 hover:bg-slate-50 dark:hover:bg-ink-900/50 align-top">
+                    <td className="px-3 py-2 whitespace-nowrap">{sameAsPrev ? '' : <Badge tone={LAW_CAT_TONE[r.category] || 'neutral'}>{r.category}</Badge>}</td>
+                    <td className="px-3 py-2 font-medium whitespace-pre-line min-w-[9rem]">
+                      {sameAsPrev ? <span className="text-slate-300 dark:text-ink-600">〃</span> : r.law_name}
+                      {!sameAsPrev && r.law_type && r.law_type !== '法令' && <div className="text-[11px] font-normal text-slate-400 mt-0.5">{r.law_type}</div>}
+                    </td>
+                    <td className="px-3 py-2 whitespace-pre-line text-slate-600 dark:text-slate-300 max-w-[16rem]">{r.requirement}</td>
+                    <td className="px-3 py-2 whitespace-pre-line text-xs text-slate-500 dark:text-slate-400 max-w-[20rem]">{r.our_compliance}</td>
+                    <td className="px-3 py-2 whitespace-pre-line text-xs text-slate-500 dark:text-slate-400 max-w-[10rem]">{r.responsible_dept}</td>
+                    <td className="px-3 py-2 whitespace-pre-line text-xs text-slate-500 dark:text-slate-400 max-w-[14rem]">{r.related_records}</td>
+                    <td className="px-3 py-2 text-center whitespace-nowrap"><Badge tone={cs.tone}>{cs.label}</Badge></td>
+                    {isAdmin && (
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-1">
+                          <button title="編集" onClick={() => setModal({ row: r })} className="p-1 text-slate-400 hover:text-brand-500"><Pencil className="w-4 h-4" /></button>
+                          <button title="削除" onClick={() => del(r.id)} className="p-1 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+              {filtered.length === 0 && <tr><td colSpan={isAdmin ? 8 : 7} className="px-3 py-10 text-center text-slate-400">該当データがありません</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <p className="text-xs text-slate-400 mt-3">出典：関連法令規制一覧・順守評価表（毎年3月・9月に改正／施行情報を確認し改訂）。労働安全衛生法・道路交通法は複数の細目を持つ。</p>
+
+      {modal && <LawModal row={modal.row} rows={rows} onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} showToast={showToast} />}
+    </>
+  )
+}
+
+function LawModal({ row, rows, onClose, onSaved, showToast }) {
+  const isNew = !row
+  const [form, setForm] = useState({
+    category: row?.category || '品質', law_type: row?.law_type || '法令',
+    law_name: row?.law_name || '', requirement: row?.requirement || '',
+    our_compliance: row?.our_compliance || '', related_equipment: row?.related_equipment || '',
+    responsible_dept: row?.responsible_dept || '', related_records: row?.related_records || '',
+    compliance_status: row?.compliance_status || '',
+    sort_order: row?.sort_order ?? ((rows || []).reduce((m, r) => Math.max(m, r.sort_order || 0), 0) + 1),
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const submit = async () => {
+    if (!form.law_name.trim()) { showToast('error', '法令・規制名は必須です'); return }
+    setSaving(true)
+    try {
+      if (isNew) { await axios.post(`${apiUrl}/api/iso/laws-regulations`, form, authConfig()); showToast('success', '追加しました') }
+      else { await axios.put(`${apiUrl}/api/iso/laws-regulations/${row.id}`, form, authConfig()); showToast('success', '更新しました') }
+      onSaved()
+    } catch (e) { showToast('error', e.response?.data?.error || '保存に失敗しました') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <ModalShell title={isNew ? '関連法令を追加' : '関連法令を編集'} onClose={onClose} wide>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Field label="区分 *">
+          <select className={inputCls} value={form.category} onChange={(e) => set('category', e.target.value)}>
+            {LAW_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="分類">
+          <select className={inputCls} value={form.law_type} onChange={(e) => set('law_type', e.target.value)}>
+            <option value="法令">法令</option>
+            <option value="その他要求事項">その他要求事項</option>
+          </select>
+        </Field>
+        <div className="sm:col-span-2"><Field label="法令・規制名 *" hint="複数行可（例：騒音規制法／振動規制法）"><textarea className={inputCls} rows={2} value={form.law_name} onChange={(e) => set('law_name', e.target.value)} /></Field></div>
+        <div className="sm:col-span-2"><Field label="要求事項" hint="親法令の細目は「細目名＋根拠条文」を記入"><textarea className={inputCls} rows={2} value={form.requirement} onChange={(e) => set('requirement', e.target.value)} /></Field></div>
+        <div className="sm:col-span-2"><Field label="当社が遵守すべき事項"><textarea className={inputCls} rows={4} value={form.our_compliance} onChange={(e) => set('our_compliance', e.target.value)} /></Field></div>
+        <Field label="関係設備・材料等"><textarea className={inputCls} rows={2} value={form.related_equipment} onChange={(e) => set('related_equipment', e.target.value)} /></Field>
+        <Field label="責任部門"><textarea className={inputCls} rows={2} value={form.responsible_dept} onChange={(e) => set('responsible_dept', e.target.value)} /></Field>
+        <div className="sm:col-span-2"><Field label="関係記録"><textarea className={inputCls} rows={2} value={form.related_records} onChange={(e) => set('related_records', e.target.value)} /></Field></div>
+        <Field label="順守評価" hint="適合／保留／対応中／不適合 など"><input className={inputCls} value={form.compliance_status} onChange={(e) => set('compliance_status', e.target.value)} placeholder="未評価" /></Field>
+        <Field label="表示順"><input type="number" className={inputCls} value={form.sort_order} onChange={(e) => set('sort_order', parseInt(e.target.value, 10) || 0)} /></Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="secondary" onClick={onClose}>キャンセル</Button>
+        <Button variant="primary" onClick={submit} disabled={saving}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}保存</Button>
+      </div>
+    </ModalShell>
+  )
+}
+
 // ══════════════ スケジュールタブ ══════════════
 const STD_LABEL = { Q: '品質', S: '労安', E: '環境' }
 const STATUS_META = { planned: { tone: 'info', label: '予定' }, done: { tone: 'success', label: '実施済' }, skipped: { tone: 'neutral', label: '見送り' } }

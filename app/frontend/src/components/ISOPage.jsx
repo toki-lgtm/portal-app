@@ -7,7 +7,7 @@ import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
-import { InstrumentsTab, RiskTab, ScheduleTab, NearMissTab, SupplierTab } from './ISOTabs'
+import { InstrumentsTab, RiskTab, ScheduleTab, NearMissTab, SupplierTab, LawsTab } from './ISOTabs'
 import { AuditTab, CorrectiveTab, ReviewTab } from './ISOTab_Cycle'
 import { AccidentTab, ComplaintTab, SatisfactionTab } from './ISOTab_Records'
 import { EnvUsageTab, EnvAspectTab, FreonTab } from './ISOTab_Env'
@@ -44,6 +44,7 @@ const GROUPS = [
   ] },
   { key: 'riskenv', label: 'リスク・環境', tabs: [
     { key: 'risk', label: 'リスクアセス' },
+    { key: 'laws', label: '関連法令・順守評価' },
     { key: 'env-aspects', label: '環境側面' },
     { key: 'env-usage', label: '環境使用量' },
     { key: 'freon', label: 'フロン点検' },
@@ -183,6 +184,7 @@ export default function ISOPage({ onBack }) {
         {tab === 'periodic' && <PeriodicTab isAdmin={isAdmin} showToast={showToast} onJump={setTab} />}
         {tab === 'instruments' && <InstrumentsTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'risk' && <RiskTab isAdmin={isAdmin} showToast={showToast} />}
+        {tab === 'laws' && <LawsTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'schedule' && <ScheduleTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'nearmiss' && <NearMissTab isAdmin={isAdmin} showToast={showToast} />}
         {tab === 'suppliers' && <SupplierTab isAdmin={isAdmin} showToast={showToast} />}
