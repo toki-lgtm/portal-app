@@ -226,6 +226,103 @@ function SelfInspectionModal({ row, onClose, onSaved, showToast }) {
 const AL_TIMINGS = ['出発', '帰着']
 const AL_METHODS = ['目視', '検知器', 'リモート']
 
+// ── 点呼ワンタップ記録パネル（名簿から未記録者をまとめて非検知/検知器で記録）──
+function RollCallPanel({ showToast, onRecorded }) {
+  const [date, setDate] = useState(today())
+  const [timing, setTiming] = useState('出発')
+  const [checker, setChecker] = useState('')
+  const [data, setData] = useState(null) // {drivers:[{driver,recorded}], confirmers:[]}
+  const [selected, setSelected] = useState(() => new Set())
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setData(null)
+    try {
+      const r = await axios.get(`${apiUrl}/api/iso/alcohol-roster`, { params: { date, timing }, ...authConfig() })
+      setData(r.data)
+      // 既定で未記録者を全選択
+      setSelected(new Set((r.data.drivers || []).filter((d) => !d.recorded).map((d) => d.driver)))
+      if (!checker && r.data.confirmers?.length) setChecker(r.data.confirmers[0])
+    } catch { showToast('error', '名簿の取得に失敗しました'); setData({ drivers: [], confirmers: [] }) }
+  }, [date, timing]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [load])
+
+  const drivers = data?.drivers || []
+  const pending = drivers.filter((d) => !d.recorded)
+  const doneCount = drivers.length - pending.length
+  const toggle = (name) => setSelected((p) => { const n = new Set(p); n.has(name) ? n.delete(name) : n.add(name); return n })
+  const allPendingSelected = pending.length > 0 && pending.every((d) => selected.has(d.driver))
+  const toggleAll = () => setSelected(allPendingSelected ? new Set() : new Set(pending.map((d) => d.driver)))
+
+  const submit = async () => {
+    const list = [...selected]
+    if (list.length === 0) { showToast('error', '記録する運転者を選んでください'); return }
+    setSaving(true)
+    try {
+      const r = await axios.post(`${apiUrl}/api/iso/alcohol-checks/batch`,
+        { check_date: date, timing, method: '検知器', checker, drivers: list }, authConfig())
+      showToast('success', `${r.data.inserted}名を記録しました${r.data.skipped ? `（既存${r.data.skipped}名はスキップ）` : ''}`)
+      await load()
+      onRecorded?.()
+    } catch (e) { showToast('error', e.response?.data?.error || '記録に失敗しました') }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Card className="p-4 mb-5 border-2 border-brand-200 dark:border-brand-500/30">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-base font-bold text-slate-900 dark:text-white">点呼ワンタップ記録</span>
+        <span className="text-xs text-slate-400">名簿から未記録者をまとめて記録（検知器・非検知）</span>
+      </div>
+      <div className="flex flex-wrap items-end gap-3 mb-3">
+        <Field label="日付"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <Field label="タイミング">
+          <div className="flex rounded-lg overflow-hidden border border-slate-300 dark:border-ink-600">
+            {['出発', '帰着'].map((t) => (
+              <button key={t} onClick={() => setTiming(t)}
+                className={`px-4 py-2 text-sm font-semibold ${timing === t ? 'bg-brand-600 text-white' : 'bg-white dark:bg-ink-900 text-slate-600 dark:text-slate-300'}`}>{t}</button>
+            ))}
+          </div>
+        </Field>
+        <Field label="確認者">
+          <select className={inputCls} value={checker} onChange={(e) => setChecker(e.target.value)}>
+            <option value="">（選択）</option>
+            {(data?.confirmers || []).map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      {data === null ? <Loading /> : (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm text-slate-500 dark:text-slate-400">
+              対象 {drivers.length}名 ・ <span className="text-success-600 dark:text-success-400 font-semibold">記録済 {doneCount}</span> ・ <span className="text-warning-600 dark:text-warning-400 font-semibold">未記録 {pending.length}</span>
+            </div>
+            <button onClick={toggleAll} className="text-sm font-semibold text-brand-600 dark:text-brand-300 hover:underline" disabled={pending.length === 0}>
+              {allPendingSelected ? '未記録の選択を解除' : '未記録を全選択'}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5 max-h-72 overflow-y-auto p-1">
+            {drivers.map((d) => (
+              <label key={d.driver}
+                className={`flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm cursor-pointer select-none ${d.recorded ? 'bg-success-50 dark:bg-success-500/10 text-slate-400' : selected.has(d.driver) ? 'bg-brand-50 dark:bg-brand-500/15 ring-1 ring-brand-300' : 'bg-slate-50 dark:bg-ink-900 hover:bg-slate-100'}`}>
+                <input type="checkbox" disabled={d.recorded} checked={d.recorded || selected.has(d.driver)} onChange={() => toggle(d.driver)} className="accent-brand-600" />
+                <span className={`truncate ${d.recorded ? 'line-through' : 'text-slate-800 dark:text-slate-100'}`}>{d.driver}</span>
+                {d.recorded && <span className="ml-auto text-[10px] text-success-500 font-semibold">済</span>}
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end mt-3">
+            <Button variant="primary" onClick={submit} disabled={saving || selected.size === 0}>
+              {saving && <Loader2 className="w-4 h-4 animate-spin" />}選択した {selected.size}名を記録
+            </Button>
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
 export function AlcoholTab({ isAdmin, showToast }) {
   const [rows, setRows] = useState(null)
   const [quick, setQuick] = useState({ check_date: today(), driver: '', timing: '出発', method: '目視', result: '非検知', value: '', checker: '' })
@@ -262,9 +359,13 @@ export function AlcoholTab({ isAdmin, showToast }) {
 
   return (
     <>
-      <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">運転前後の酒気帯び確認を素早く記録（誰でも記録できます）</p>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">運転前後の酒気帯び確認を記録（誰でも記録できます）。点呼はまとめて、例外は個別に。</p>
 
-      <Card className="p-4 mb-5">
+      <RollCallPanel showToast={showToast} onRecorded={load} />
+
+      <details className="mb-5">
+        <summary className="text-sm font-semibold text-slate-600 dark:text-slate-300 cursor-pointer">個別に記録する（例外・検知時など）</summary>
+      <Card className="p-4 mt-3">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 items-end">
           <Field label="日付"><input type="date" className={inputCls} value={quick.check_date} onChange={(e) => setQ('check_date', e.target.value)} /></Field>
           <Field label="運転者 *"><input className={inputCls} value={quick.driver} onChange={(e) => setQ('driver', e.target.value)} /></Field>
@@ -286,6 +387,7 @@ export function AlcoholTab({ isAdmin, showToast }) {
           <Button variant="primary" size="sm" onClick={quickSubmit} disabled={saving}>{saving && <Loader2 className="w-4 h-4 animate-spin" />}<Plus className="w-4 h-4" />記録する</Button>
         </div>
       </Card>
+      </details>
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
