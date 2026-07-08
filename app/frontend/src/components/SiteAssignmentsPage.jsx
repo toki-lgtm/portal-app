@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, HardHat, Users, RefreshCw, Plus, Pencil, Trash2,
-  Loader2, ChevronLeft, ChevronRight, ChevronDown,
+  Loader2, ChevronLeft, ChevronRight, ChevronDown, Check,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -49,31 +49,74 @@ function MemberChip({ m }) {
   )
 }
 
+// 氏名欄のコンボボックス。タップで社員一覧が開き、入力で絞り込み。
+// 名簿外（協力会社・応援）はそのまま自由入力も可。
+function StaffNameInput({ value, staffOptions, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('touchstart', onDoc)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('touchstart', onDoc)
+    }
+  }, [])
+
+  const q = (value || '').trim()
+  // 入力が社員名そのものなら全件、部分入力なら絞り込み。空なら全件。
+  const isExact = staffOptions.includes(q)
+  const filtered = (!q || isExact) ? staffOptions : staffOptions.filter((n) => n.includes(q))
+
+  return (
+    <div className="relative flex-1 min-w-0" ref={ref}>
+      <input
+        className="w-full rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 pr-7 text-sm"
+        placeholder="社員を選択 / 協力会社名"
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
+      />
+      <button type="button" tabIndex={-1} aria-label="社員一覧" onClick={() => setOpen((v) => !v)}
+        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-slate-400">
+        <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-20 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-800 shadow-lg">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-slate-400">該当なし（自由入力できます）</div>
+          ) : (
+            filtered.map((n) => (
+              <button key={n} type="button"
+                onClick={() => { onChange(n); setOpen(false) }}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-brand-50 dark:hover:bg-brand-500/15">
+                <span>{n}</span>
+                {q === n && <Check className="w-4 h-4 text-brand-500" />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // 人員配列の編集UI（名前／協力会社／人数）。
-// staffOptions（社員名の配列）があれば、氏名欄を社員一覧からの選択（入力候補）にする。
-// 名簿外（協力会社・応援）の人はそのまま自由入力も可。
 function MembersEditor({ members, onChange, staffOptions = [] }) {
   const update = (i, key, val) => onChange(members.map((m, idx) => (idx === i ? { ...m, [key]: val } : m)))
   const remove = (i) => onChange(members.filter((_, idx) => idx !== i))
   const add = () => onChange([...members, { name: '', company: '', count: 1 }])
   return (
     <div className="space-y-2">
-      {/* 氏名欄の入力候補（社員一覧） */}
-      <datalist id="site-staff-options">
-        {staffOptions.map((n) => <option key={n} value={n} />)}
-      </datalist>
       {members.map((m, i) => {
         const isStaff = staffOptions.includes((m.name || '').trim())
         return (
           <div key={i} className="flex items-center gap-2">
-            <input
-              list="site-staff-options"
-              className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
-              placeholder="社員を選択 / 協力会社名"
-              value={m.name}
-              onChange={(e) => update(i, 'name', e.target.value)}
-            />
-            <span className={`shrink-0 text-xs w-10 text-center ${isStaff ? 'text-success-600 dark:text-success-400' : 'text-slate-300 dark:text-slate-600'}`}>
+            <StaffNameInput value={m.name} staffOptions={staffOptions} onChange={(val) => update(i, 'name', val)} />
+            <span className={`shrink-0 text-xs w-8 text-center ${isStaff ? 'text-success-600 dark:text-success-400' : 'text-slate-300 dark:text-slate-600'}`}>
               {isStaff ? '社員' : ''}
             </span>
             <input className="w-24 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2 py-1.5 text-sm"
@@ -88,7 +131,7 @@ function MembersEditor({ members, onChange, staffOptions = [] }) {
         )
       })}
       <Button variant="secondary" size="sm" onClick={add}><Plus className="w-4 h-4" />人員を追加</Button>
-      <p className="text-xs text-slate-400">氏名欄をタップすると社員一覧から選べます。協力会社はそのまま会社名を入力し、人数欄に人数を入れてください（例: 福建工業 5）。</p>
+      <p className="text-xs text-slate-400">氏名欄をタップすると社員一覧が開きます。協力会社はそのまま会社名を入力し、人数欄に人数を入れてください（例: 福建工業 5）。</p>
     </div>
   )
 }
