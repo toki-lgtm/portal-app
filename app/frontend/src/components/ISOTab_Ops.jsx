@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import axios from 'axios'
-import { Loader2, Plus, Pencil, Trash2, AlertTriangle, Copy, ChevronDown, ChevronUp } from 'lucide-react'
+import { Loader2, Plus, Pencil, Trash2, AlertTriangle, Copy, ChevronDown, ChevronUp, Printer } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import ModalShell from './ui/ModalShell'
 import Field from './ui/Field'
 import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { printCommitteeDoc, printGoalPlan } from '../lib/isoDocPrint'
 
 // ISO管理・日常運用4モジュール（自主検査/アルコールチェック/目標達成計画/安全衛生委員会）
 // ※ ISOTabs.jsx とは別ファイル（既存タブに影響を与えないため新規分離）
@@ -604,11 +605,27 @@ export function GoalTab({ isAdmin, showToast }) {
 
   const toggle = (id) => setOpen((p) => ({ ...p, [id]: !p[id] }))
 
+  const fiscalYears = useMemo(
+    () => [...new Set((goals || []).map((g) => String(g.fiscal_year)))].sort((a, b) => b.localeCompare(a)),
+    [goals]
+  )
+
   if (goals === null) return <Loading />
 
   return (
     <>
-      <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">6.2品質・労働安全衛生目標達成計画書。月次で結果・評価を積み上げます。</p>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <p className="text-sm text-slate-500 dark:text-slate-400">6.2品質・労働安全衛生目標達成計画書。月次で結果・評価を積み上げます。</p>
+        {fiscalYears.length > 0 && (
+          <div className="ml-auto flex flex-wrap gap-2">
+            {fiscalYears.map((fy) => (
+              <Button key={fy} variant="secondary" size="sm" onClick={() => printGoalPlan(fy, goals, progress)}>
+                <Printer className="w-4 h-4" />{fy}年度 計画書PDF
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="space-y-3">
         {goals.map((g) => {
           const rows = progress[g.id] || []
@@ -634,6 +651,8 @@ export function GoalTab({ isAdmin, showToast }) {
                     <p><span className="font-semibold">責任者: </span>{g.owner || '—'}</p>
                     <p><span className="font-semibold">達成期限: </span>{g.deadline || '—'}</p>
                     <p><span className="font-semibold">事業プロセス: </span>{g.ms_clause || '—'}</p>
+                    <p className="sm:col-span-2"><span className="font-semibold">実施事項: </span>{g.action_items || '—'}</p>
+                    <p className="sm:col-span-2"><span className="font-semibold">必要な資源: </span>{g.resources || '—'}</p>
                     <p className="sm:col-span-2"><span className="font-semibold">評価方法: </span>{g.eval_method || '—'}</p>
                   </div>
 
@@ -743,6 +762,7 @@ export function CommitteeTab({ isAdmin, showToast }) {
                 </div>
                 {r.summary && <p className="text-sm text-slate-600 dark:text-slate-300 mt-1 line-clamp-2">{r.summary}</p>}
               </div>
+              <button title="この書式でPDF出力" onClick={() => printCommitteeDoc(r)} className="p-1 text-slate-400 hover:text-brand-500 shrink-0"><Printer className="w-4 h-4" /></button>
               {isAdmin && (
                 <button title="編集" onClick={() => setModal({ row: r })} className="p-1 text-slate-400 hover:text-brand-500 shrink-0"><Pencil className="w-4 h-4" /></button>
               )}
@@ -775,7 +795,10 @@ function CommitteeDetailModal({ row, onClose }) {
         {row.discussion && <p><span className="font-semibold">協議事項: </span>{row.discussion}</p>}
         {row.summary && <p><span className="font-semibold">総評{row.summary_by ? `（${row.summary_by}）` : ''}: </span>{row.summary}</p>}
       </div>
-      <div className="flex justify-end mt-5"><Button variant="secondary" onClick={onClose}>閉じる</Button></div>
+      <div className="flex justify-end gap-2 mt-5">
+        <Button variant="primary" onClick={() => printCommitteeDoc(row)}><Printer className="w-4 h-4" />この書式でPDF出力</Button>
+        <Button variant="secondary" onClick={onClose}>閉じる</Button>
+      </div>
     </ModalShell>
   )
 }
