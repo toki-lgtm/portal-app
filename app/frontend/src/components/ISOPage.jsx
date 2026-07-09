@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
-import { ArrowLeft, ClipboardList, Loader2, ExternalLink, Pencil, Plus, History } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ClipboardList, Loader2, ExternalLink, Pencil, Plus, History } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
@@ -68,6 +68,19 @@ const GROUPS = [
     { key: 'review', label: 'マネジメントレビュー' },
   ] },
 ]
+
+// 台帳の行(sort_order) → 同じ実体を管理しているISO機能タブ。台帳↔各機能の相互リンク用。
+// これらの行は Drive フォルダより「ポータル内の生きたデータ」が本体なので、対応タブへ飛ばす。
+const LEDGER_MODULE_TAB = {
+  4: 'committee', 5: 'risk', 6: 'laws', 7: 'goals',
+  11: 'self-inspection', 12: 'self-inspection', 13: 'self-inspection', 14: 'self-inspection',
+  15: 'alcohol', 19: 'instruments', 20: 'instruments',
+  32: 'complaints', 36: 'suppliers', 45: 'accidents',
+  51: 'satisfaction', 52: 'satisfaction', 53: 'audit', 54: 'audit',
+  55: 'corrective', 56: 'review', 57: 'nearmiss', 58: 'corrective',
+}
+// タブkey → ラベル（GROUPS から自動生成）。
+const TAB_LABEL = Object.fromEntries(GROUPS.flatMap((g) => g.tabs).map((t) => [t.key, t.label]))
 
 const inputCls =
   'w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-900 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-500'
@@ -283,6 +296,17 @@ export default function ISOPage({ onBack }) {
                             </a>
                           ) : (
                             d.title
+                          )}
+                          {LEDGER_MODULE_TAB[d.sort_order] && (
+                            <button
+                              type="button"
+                              onClick={() => setTab(LEDGER_MODULE_TAB[d.sort_order])}
+                              className="mt-1 flex items-center gap-1 text-xs text-brand-600 hover:underline dark:text-brand-400"
+                              title="この記録をポータルで管理する画面へ移動"
+                            >
+                              <ArrowRight className="w-3 h-3 shrink-0" />
+                              アプリで管理（{TAB_LABEL[LEDGER_MODULE_TAB[d.sort_order]]}）
+                            </button>
                           )}
                         </td>
                         <td className="px-3 py-2 text-center align-top">{d.version}</td>
