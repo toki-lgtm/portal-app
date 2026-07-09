@@ -47,6 +47,7 @@ import CalendarPage, { MonthGrid, KIND_META } from './components/CalendarPage'
 import ISOPage from './components/ISOPage'
 import LibraryPage from './components/LibraryPage'
 import SiteAssignmentsPage from './components/SiteAssignmentsPage'
+import ArchivePage from './components/ArchivePage'
 import { applyTheme, loadTheme } from './lib/theme'
 import { API_URL as apiUrl, authConfig as makeAuthConfig } from './lib/api'
 
@@ -1277,6 +1278,8 @@ function AppContent() {
     page = <LibraryPage onBack={() => setView('dashboard')} />
   } else if (view === 'site-assignments') {
     page = <SiteAssignmentsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'archive') {
+    page = <ArchivePage onBack={() => setView('dashboard')} />
   } else {
     page = (
       <DashboardPage
