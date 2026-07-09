@@ -269,7 +269,22 @@ export default function ISOPage({ onBack }) {
                     {filtered.map((d) => (
                       <tr key={d.id} className="border-b border-slate-100 dark:border-ink-800 hover:bg-slate-50 dark:hover:bg-ink-900/50">
                         <td className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap align-top">{d.clause}</td>
-                        <td className="px-3 py-2 text-slate-900 dark:text-white align-top">{d.title}</td>
+                        <td className="px-3 py-2 text-slate-900 dark:text-white align-top">
+                          {d.storage_link ? (
+                            <a
+                              href={d.storage_link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-700 hover:underline dark:text-brand-400"
+                              title="Googleドライブの保管先を開く"
+                            >
+                              {d.title}
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-60" />
+                            </a>
+                          ) : (
+                            d.title
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-center align-top">{d.version}</td>
                         <td className="px-3 py-2 whitespace-nowrap align-top">{d.dept}</td>
                         <td className="px-3 py-2 whitespace-nowrap align-top">{d.approver}</td>
