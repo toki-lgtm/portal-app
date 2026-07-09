@@ -103,9 +103,11 @@ export default function ArchivePage({ onBack }) {
     setScope(sc)
   }
 
+  // 工事フォルダを開いたら、原本ファイル一覧ではなく「その工事の書類データ（本文）」を既定表示する。
+  // ＝普段はデータを読み、原本PDFは各書類から必要時だけ参照する。
   const openFolder = (item) => {
-    setPath((p) => [...p, { id: item.id, name: item.name }])
-    loadList(scope, item.id)
+    setQ(''); setSubmittedQ(''); setDocTypeFilter('')
+    setKoujiFilter(item.id)
   }
   const jumpTo = (index) => {
     const target = path[index]
@@ -217,11 +219,16 @@ export default function ArchivePage({ onBack }) {
         {searchMode ? (
           <>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                書類 {searching ? '…' : `${results.length}件`}
-                {facets?.total != null && <span className="ml-2 text-xs">（索引済 {facets.total}書類）</span>}
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                {koujiFilter && !submittedQ && (
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    {facets?.kouji?.find((k) => k.id === koujiFilter)?.name || '工事'} の書類
+                  </span>
+                )}
+                <span className="text-slate-500 dark:text-slate-400">{searching ? '…' : `${results.length}件`}</span>
+                {facets?.total != null && <span className="ml-2 text-xs text-slate-400">（索引済 全{facets.total}書類）</span>}
               </p>
-              <button onClick={clearSearch} className="text-sm text-brand-600 dark:text-brand-400 hover:underline">一覧に戻る</button>
+              <button onClick={clearSearch} className="text-sm text-brand-600 dark:text-brand-400 hover:underline">工事一覧へ戻る</button>
             </div>
             {searching ? (
               <div className="text-center py-20"><Loader2 className="w-8 h-8 animate-spin mx-auto text-brand-500" /></div>
@@ -280,7 +287,7 @@ export default function ArchivePage({ onBack }) {
                     <div className="shrink-0">{item.isFolder ? <Folder className="w-8 h-8 text-accent-500" /> : <FileText className="w-8 h-8 text-brand-400" />}</div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-slate-800 dark:text-slate-100 truncate" title={item.name}>{item.name}</p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">{item.isFolder ? 'フォルダ' : opening === item.id ? '準備中…' : 'タップして開く'}</p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">{item.isFolder ? 'タップで書類を見る（本文データ）' : opening === item.id ? '準備中…' : 'タップして開く'}</p>
                     </div>
                   </Card>
                 ))}
