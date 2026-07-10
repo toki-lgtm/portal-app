@@ -71,21 +71,17 @@ export default function LibraryPage({ onBack }) {
   //   PDF・画像はタブ内で表示。Range 対応済みなので大容量でも先頭から軽く開ける。
   //   Word/Excel 等ブラウザが表示できない形式は、そのまま保存扱いになる。
   const viewFile = async (item) => {
-    // 非同期（URL取得）を挟むと window.open がポップアップ扱いでブロックされ得る。
-    // クリック直後に空タブを確保し、URL取得後に遷移させる。
-    const win = window.open('about:blank', '_blank')
-    if (win) win.opener = null // タブ乗っ取り防止（noopener 相当）
     setOpening(item.id)
     try {
       const res = await axios.get(`${apiUrl}/api/library/file/${item.id}/url?dl=0`, authConfig())
       const url = res.data?.url
       if (!url) throw new Error('URLの取得に失敗しました')
-      if (win) win.location = url
-      else window.open(url, '_blank', 'noopener') // ブロックされていた場合の保険
+      // iOS Safari は非同期後の window.open(新規タブ) をブロックするため、同一タブ遷移で開く。
+      // inline 配信なので PDF/画像はそのタブに表示（戻るでポータルに戻れる）。
+      window.location.href = url
     } catch (e) {
-      if (win) win.close()
-      showToast('error', e.response?.data?.error || '閲覧用URLの取得に失敗しました')
-    } finally {
+      const s = e.response?.status ? `（エラー${e.response.status}）` : ''
+      showToast('error', (e.response?.data?.error || '閲覧用URLの取得に失敗しました') + s)
       setOpening(null)
     }
   }
@@ -97,13 +93,9 @@ export default function LibraryPage({ onBack }) {
       const res = await axios.get(`${apiUrl}/api/library/file/${item.id}/url`, authConfig())
       const url = res.data?.url
       if (!url) throw new Error('URLの取得に失敗しました')
-      const a = document.createElement('a')
-      a.href = url
-      a.download = item.name || '' // サーバの Content-Disposition が正式なファイル名を付与する
-      a.rel = 'noopener'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      // iOS Safari は a.download(クロスオリジン) を無視しがち。attachment 配信へ同一タブ遷移すれば
+      // Safari のダウンロード機能が受け取る。PC はページ遷移せず保存される。
+      window.location.href = url
     } catch (e) {
       showToast('error', e.response?.data?.error || 'ダウンロードに失敗しました')
     } finally {
