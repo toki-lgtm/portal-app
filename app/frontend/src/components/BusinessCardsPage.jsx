@@ -14,6 +14,7 @@ import Field from './ui/Field'
 import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { useToast } from '../lib/useToast'
 import { inputCls } from '../lib/ui'
+import { isPdfFile, pdfToImageFiles } from '../lib/pdf'
 
 // 日付（YYYY/M/D）
 function fmtDate(d) {
@@ -134,15 +135,18 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
     }
   })
   const [saving, setSaving] = useState(false)
-  const [imageFile, setImageFile] = useState(null)        // 新しく選択した画像
+  const [imageFile, setImageFile] = useState(null)        // 新しく選択した表面画像
   const [imagePreview, setImagePreview] = useState(item?.image_url || null)
+  const [backImageFile, setBackImageFile] = useState(null)          // 新しく選択した裏面画像
+  const [backImagePreview, setBackImagePreview] = useState(item?.back_image_url || null)
+  const [removeBack, setRemoveBack] = useState(false)     // 既存の裏面を削除するか（編集時）
   const [scanning, setScanning] = useState(false)         // OCR中
   const [categoryOptions, setCategoryOptions] = useState([])  // (4) カテゴリ候補
   // manual モードで画像添付エリアを表示するかどうか
   const [showImageArea, setShowImageArea] = useState(mode !== 'manual')
 
-  const cameraRef = useRef(null)
-  const fileRef = useRef(null)
+  // 画像添付ボタン共通スタイル（表面/裏面 × カメラ/ファイルで再利用）
+  const attachBtnCls = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer'
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -192,8 +196,8 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
       })
   }, [])
 
-  // 画像を選択したとき: プレビュー＋自動OCR
-  const handleImageSelect = async (file) => {
+  // 表面画像を確定してOCR自動入力（引数は画像File。PDFは呼び出し前に画像へ変換済み）
+  const handleFrontImage = async (file) => {
     if (!file) return
     setImageFile(file)
     setImagePreview(URL.createObjectURL(file))
@@ -235,6 +239,58 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
     }
   }
 
+  // 裏面画像を確定（OCRなし・画像として保存するだけ）
+  const setBackImage = (file) => {
+    if (!file) return
+    setBackImageFile(file)
+    setBackImagePreview(URL.createObjectURL(file))
+    setRemoveBack(false)
+  }
+
+  // 表面の入力（カメラ/ファイル）。PDFなら 1p=表・2p=裏に自動分解する。
+  const handleFrontSelect = async (raw) => {
+    if (!raw) return
+    if (isPdfFile(raw)) {
+      setScanning(true)
+      try {
+        const pages = await pdfToImageFiles(raw, { maxPages: 2, baseName: 'front' })
+        if (pages.length === 0) { showToast('error', 'PDFからページを読み取れませんでした'); setScanning(false); return }
+        if (pages.length >= 2) {
+          setBackImage(pages[1])
+          showToast('success', 'PDFから表・裏の2面を読み取りました')
+        }
+        await handleFrontImage(pages[0])   // 表面（1ページ目）でOCR
+      } catch {
+        setScanning(false)
+        showToast('error', 'PDFの読み込みに失敗しました')
+      }
+      return
+    }
+    await handleFrontImage(raw)
+  }
+
+  // 裏面の入力（カメラ/ファイル）。PDFなら1ページ目を裏面画像として使う。
+  const handleBackSelect = async (raw) => {
+    if (!raw) return
+    if (isPdfFile(raw)) {
+      try {
+        const pages = await pdfToImageFiles(raw, { maxPages: 1, baseName: 'back' })
+        if (pages.length > 0) setBackImage(pages[0])
+      } catch {
+        showToast('error', 'PDFの読み込みに失敗しました')
+      }
+      return
+    }
+    setBackImage(raw)
+  }
+
+  // 裏面を外す（編集時は既存裏面の削除フラグを立てる）
+  const clearBackImage = () => {
+    setBackImageFile(null)
+    setBackImagePreview(null)
+    setRemoveBack(true)
+  }
+
   const save = async () => {
     if (!form.full_name.trim() && !form.company.trim()) {
       showToast('error', '氏名または会社名は必須です')
@@ -243,7 +299,9 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
     setSaving(true)
     try {
       const fd = new FormData()
-      if (imageFile) fd.append('file', imageFile)
+      if (imageFile) fd.append('file', imageFile)            // 表面
+      if (backImageFile) fd.append('back_file', backImageFile)  // 裏面
+      if (!isNew && removeBack && !backImageFile) fd.append('remove_back', '1')  // 既存裏面を削除
       // (3) category を追加したフィールドリストで送信
       const fields = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note','visibility','category']
       for (const k of fields) fd.append(k, form[k])
@@ -294,54 +352,73 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
           </div>
           {isNew && (
             <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-              スマホのカメラで撮影、またはファイルを選択すると、AIが名刺の情報を読み取って自動入力します。
+              カメラ撮影またはファイルを選ぶと、AIが表面の情報を読み取って自動入力します。裏面がある場合は「裏面」に追加してください。
+              <span className="font-semibold">2ページのPDFは1枚目＝表・2枚目＝裏に自動で振り分けます。</span>
             </p>
           )}
 
-          {/* プレビュー */}
-          {imagePreview && (
-            <div className="mb-3 relative w-fit">
-              <img
-                src={imagePreview}
-                alt="名刺プレビュー"
-                className="h-32 rounded-xl object-cover border border-slate-200 dark:border-ink-600"
-              />
-              {scanning && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl">
-                  <Loader2 className="w-6 h-6 text-white animate-spin" />
-                  <span className="ml-2 text-white text-sm font-semibold">読み取り中...</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* 表面（OCR対象） */}
+            <div>
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">表面（自動読み取り）</p>
+              {imagePreview ? (
+                <div className="mb-2 relative w-fit">
+                  <img src={imagePreview} alt="表面プレビュー" className="h-32 rounded-xl object-cover border border-slate-200 dark:border-ink-600" />
+                  {scanning && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl">
+                      <Loader2 className="w-6 h-6 text-white animate-spin" />
+                      <span className="ml-2 text-white text-sm font-semibold">読み取り中...</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mb-2 h-32 w-full max-w-[13rem] rounded-xl border border-dashed border-slate-300 dark:border-ink-600 flex items-center justify-center text-slate-300 dark:text-ink-500">
+                  <User className="w-8 h-8" />
                 </div>
               )}
+              <div className="flex flex-wrap gap-2">
+                <label className={attachBtnCls}>
+                  <Camera className="w-4 h-4" />撮影
+                  <input type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={(e) => { handleFrontSelect(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+                <label className={attachBtnCls}>
+                  <Upload className="w-4 h-4" />ファイル/PDF
+                  <input type="file" accept="image/*,application/pdf" className="hidden"
+                    onChange={(e) => { handleFrontSelect(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+              </div>
             </div>
-          )}
 
-          <div className="flex flex-wrap gap-2">
-            {/* カメラ撮影（スマホ背面カメラ） */}
-            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
-              <Camera className="w-4 h-4" />
-              カメラで撮影
-              <input
-                ref={cameraRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
-              />
-            </label>
-
-            {/* ファイル選択（PCや既存写真） */}
-            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-700 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-ink-600 cursor-pointer">
-              <Upload className="w-4 h-4" />
-              ファイルを選択
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => { handleImageSelect(e.target.files?.[0]); e.target.value = '' }}
-              />
-            </label>
+            {/* 裏面（任意・保存のみ） */}
+            <div>
+              <p className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">裏面（任意）</p>
+              {backImagePreview ? (
+                <div className="mb-2 relative w-fit">
+                  <img src={backImagePreview} alt="裏面プレビュー" className="h-32 rounded-xl object-cover border border-slate-200 dark:border-ink-600" />
+                  <button type="button" onClick={clearBackImage} aria-label="裏面を削除"
+                    className="absolute -top-2 -right-2 p-1 rounded-full bg-white dark:bg-ink-700 border border-slate-300 dark:border-ink-500 shadow text-slate-500 hover:text-red-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div className="mb-2 h-32 w-full max-w-[13rem] rounded-xl border border-dashed border-slate-300 dark:border-ink-600 flex items-center justify-center text-slate-400 dark:text-ink-500 text-xs">
+                  裏面なし
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <label className={attachBtnCls}>
+                  <Camera className="w-4 h-4" />撮影
+                  <input type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={(e) => { handleBackSelect(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+                <label className={attachBtnCls}>
+                  <Upload className="w-4 h-4" />ファイル/PDF
+                  <input type="file" accept="image/*,application/pdf" className="hidden"
+                    onChange={(e) => { handleBackSelect(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+              </div>
+            </div>
           </div>
         </div>
       ) : (
@@ -721,9 +798,15 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
   return (
     <ModalShell title={card.full_name || card.company || '名刺詳細'} onClose={onClose} wide>
       <div className="flex flex-col sm:flex-row gap-5">
-        {/* 画像 */}
+        {/* 画像（表面 ＋ 裏面があれば裏面も） */}
         <div className="sm:w-48 shrink-0">
           <CardThumb imageUrl={card.image_url} name={card.full_name} onZoom={onZoom} />
+          {card.back_image_url && (
+            <div className="mt-2">
+              <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 mb-1">裏面</p>
+              <CardThumb imageUrl={card.back_image_url} name={`${card.full_name || ''} 裏面`} onZoom={onZoom} />
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap justify-center gap-1">
             <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
               {card.visibility === 'shared' ? '全社共有' : '個人'}
@@ -912,6 +995,9 @@ function CardTile({ card, onClick }) {
         <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
           {card.visibility === 'shared' ? '全社共有' : '個人'}
         </Badge>
+        {card.back_image_url && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-ink-700 text-slate-500 dark:text-slate-400">両面</span>
+        )}
         {card.category && (
           <Badge tone="warning">
             <Tag className="w-3 h-3 inline mr-0.5" />{card.category}
