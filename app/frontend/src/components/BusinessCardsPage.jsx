@@ -203,7 +203,8 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await axios.post(`${apiUrl}/api/cards/scan`, fd, authConfigMultipart())
+      // OCR は複数回の画像解析が走るため長め。ただし無限待ちにはしない（120秒で打ち切り）
+      const res = await axios.post(`${apiUrl}/api/cards/scan`, fd, { ...authConfigMultipart(), timeout: 120000 })
 
       // 1画像に複数枚の名刺が写っていた場合 → 複数名刺レビュー画面へ切り替え
       const detected = res.data?.cards
