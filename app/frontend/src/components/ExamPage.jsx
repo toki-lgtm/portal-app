@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, GraduationCap, Check, X, ChevronRight, Loader2,
   RefreshCw, Trophy, AlertTriangle, BookOpen, Target, Sparkles, BarChart3,
+  Library, FileText,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -52,6 +53,11 @@ export default function ExamPage({ onBack }) {
   const [results, setResults] = useState([]) // [{correct}]
   const [submitting, setSubmitting] = useState(false)
 
+  // 教材（読み物）: 教本の章立て本文
+  const [matChapters, setMatChapters] = useState([]) // [{chapter_no,title,section_count}]
+  const [matReading, setMatReading] = useState(null) // { chapter_no, chapter_title, sections[] }
+  const [matLoading, setMatLoading] = useState(false)
+
   // 科目一覧を取得（自動選択はせず、まず科目選択画面を出す）
   useEffect(() => {
     ;(async () => {
@@ -80,6 +86,35 @@ export default function ExamPage({ onBack }) {
       setLoading(false)
     }
   }, [showToast])
+
+  // 教材（読み物）: 章一覧を取得して教材トップへ
+  const openMaterials = useCallback(async () => {
+    if (!subjectId) return
+    setStage('materials'); setMatReading(null); setMatLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/exam/subjects/${subjectId}/materials/chapters`, authConfig())
+      setMatChapters(data.chapters || [])
+    } catch (e) {
+      showToast('error', '教材の取得に失敗しました')
+    } finally {
+      setMatLoading(false)
+    }
+  }, [subjectId, showToast])
+
+  // 教材（読み物）: 指定章の本文を取得して読み物画面へ
+  const openMatChapter = useCallback(async (cno) => {
+    if (!subjectId) return
+    setStage('reading'); setMatReading(null); setMatLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/exam/subjects/${subjectId}/materials/chapters/${cno}`, authConfig())
+      setMatReading(data)
+    } catch (e) {
+      showToast('error', '本文の取得に失敗しました')
+      setStage('materials')
+    } finally {
+      setMatLoading(false)
+    }
+  }, [subjectId, showToast])
 
   const subject = subjects.find((s) => s.id === subjectId)
 
@@ -550,6 +585,85 @@ export default function ExamPage({ onBack }) {
     )
   }
 
+  // ── 教材（読み物）: 章一覧 ─────────────────────────────────
+  if (stage === 'materials') {
+    return (
+      <div className="max-w-3xl mx-auto p-4">
+        <Header title={`教本を読む${subject ? '：' + subject.name : ''}`} onBackClick={backToHome} />
+        {matLoading ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin mr-2" /> 読み込み中…
+          </div>
+        ) : matChapters.length === 0 ? (
+          <Card className="p-8 text-center text-slate-500">教材がまだありません。</Card>
+        ) : (
+          <>
+            <p className="text-xs text-slate-400 mb-3 flex items-center gap-1">
+              <BookOpen size={12} /> 公式教本の本文を章ごとに読めます。演習の前後のインプットにどうぞ。
+            </p>
+            <Card className="divide-y divide-slate-100 dark:divide-ink-700 overflow-hidden">
+              {matChapters.map((c) => (
+                <button key={c.chapter_no} onClick={() => openMatChapter(c.chapter_no)}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-ink-700/50">
+                  <span className="w-6 text-sm text-slate-400 shrink-0">{c.chapter_no}</span>
+                  <span className="flex-1 text-slate-800 dark:text-slate-100">{c.title}</span>
+                  <span className="text-xs text-slate-400 shrink-0">{c.section_count}節</span>
+                  <ChevronRight size={16} className="text-slate-300 shrink-0" />
+                </button>
+              ))}
+            </Card>
+          </>
+        )}
+        {toast && <Toast toast={toast} />}
+      </div>
+    )
+  }
+
+  // ── 教材（読み物）: 本文表示 ───────────────────────────────
+  if (stage === 'reading') {
+    return (
+      <div className="max-w-3xl mx-auto p-4">
+        <Header title={matReading ? matReading.chapter_title : '本文'} onBackClick={openMaterials} />
+        {matLoading || !matReading ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin mr-2" /> 読み込み中…
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 mb-3">
+              <Badge tone="neutral">第{matReading.chapter_no}章</Badge>
+              <span className="text-xs text-slate-400">{matReading.sections.length}節</span>
+            </div>
+            <div className="space-y-4">
+              {matReading.sections.map((s) => (
+                <Card key={s.id} className="p-5">
+                  {s.heading && (
+                    <h3 className="font-bold text-slate-800 dark:text-slate-100 mb-2 flex items-start gap-2">
+                      <FileText size={16} className="text-brand-600 mt-1 shrink-0" />
+                      <span>{s.heading}</span>
+                    </h3>
+                  )}
+                  <div className="text-[15px] leading-relaxed text-slate-700 dark:text-slate-200 whitespace-pre-wrap">
+                    {s.body}
+                  </div>
+                  {s.src_page_start && (
+                    <p className="text-[11px] text-slate-300 dark:text-slate-500 mt-2">教本 p{s.src_page_start}{s.src_page_end && s.src_page_end !== s.src_page_start ? `–${s.src_page_end}` : ''}</p>
+                  )}
+                </Card>
+              ))}
+            </div>
+            <div className="mt-4">
+              <Button variant="secondary" onClick={openMaterials}>
+                <ArrowLeft size={16} /> 章一覧へ戻る
+              </Button>
+            </div>
+          </>
+        )}
+        {toast && <Toast toast={toast} />}
+      </div>
+    )
+  }
+
   // ── ホーム（科目情報＋章選択＋モード） ────────────────────────
   return (
     <div className="max-w-3xl mx-auto p-4">
@@ -580,9 +694,12 @@ export default function ExamPage({ onBack }) {
                 {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             )}
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
               <Button variant="secondary" onClick={openAnalytics}>
                 <BarChart3 size={16} /> 学習分析を見る
+              </Button>
+              <Button variant="secondary" onClick={openMaterials}>
+                <Library size={16} /> 教本を読む
               </Button>
             </div>
           </Card>
