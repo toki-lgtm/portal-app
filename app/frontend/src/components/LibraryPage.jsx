@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, BookOpen, Folder, FileText, Loader2, Trash2,
-  FolderPlus, Upload, ChevronRight, Image as ImageIcon,
+  FolderPlus, Upload, ChevronRight, Image as ImageIcon, Download,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -67,8 +67,30 @@ export default function LibraryPage({ onBack }) {
     loadList(index === 0 ? null : target.id)
   }
 
+  // ファイルをブラウザで閲覧（inline 配信＝dl=0 を新規タブで開く）。
+  //   PDF・画像はタブ内で表示。Range 対応済みなので大容量でも先頭から軽く開ける。
+  //   Word/Excel 等ブラウザが表示できない形式は、そのまま保存扱いになる。
+  const viewFile = async (item) => {
+    // 非同期（URL取得）を挟むと window.open がポップアップ扱いでブロックされ得る。
+    // クリック直後に空タブを確保し、URL取得後に遷移させる。
+    const win = window.open('about:blank', '_blank')
+    if (win) win.opener = null // タブ乗っ取り防止（noopener 相当）
+    setOpening(item.id)
+    try {
+      const res = await axios.get(`${apiUrl}/api/library/file/${item.id}/url?dl=0`, authConfig())
+      const url = res.data?.url
+      if (!url) throw new Error('URLの取得に失敗しました')
+      if (win) win.location = url
+      else window.open(url, '_blank', 'noopener') // ブロックされていた場合の保険
+    } catch (e) {
+      if (win) win.close()
+      showToast('error', e.response?.data?.error || '閲覧用URLの取得に失敗しました')
+    } finally {
+      setOpening(null)
+    }
+  }
+
   // ファイルをダウンロード（短命URLを取得し attachment 配信をアンカーで保存）。
-  //   ブラウザ内表示は端末/ビューア依存で不安定なため、保存する形にしている。
   const downloadFile = async (item) => {
     setOpening(item.id)
     try {
@@ -216,7 +238,7 @@ export default function LibraryPage({ onBack }) {
               <Card
                 key={item.id}
                 className="p-4 flex items-center gap-3 group hover:shadow-md transition cursor-pointer"
-                onClick={() => (item.isFolder ? openFolder(item) : downloadFile(item))}
+                onClick={() => (item.isFolder ? openFolder(item) : viewFile(item))}
               >
                 <div className="shrink-0">
                   {item.isFolder ? (
@@ -232,9 +254,21 @@ export default function LibraryPage({ onBack }) {
                     {item.name}
                   </p>
                   <p className="text-xs text-slate-400 dark:text-slate-500">
-                    {item.isFolder ? 'フォルダ' : opening === item.id ? '準備中…' : 'タップして保存'}
+                    {item.isFolder ? 'フォルダ' : opening === item.id ? '準備中…' : 'タップして閲覧'}
                   </p>
                 </div>
+                {!item.isFolder && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      downloadFile(item)
+                    }}
+                    className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-brand-600 hover:bg-brand-50 dark:hover:bg-brand-500/15 transition"
+                    title="ダウンロード（保存）"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                )}
                 {isAdmin && (
                   <button
                     onClick={(e) => {
