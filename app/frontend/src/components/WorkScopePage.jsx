@@ -106,7 +106,46 @@ export default function WorkScopePage({ onBack }) {
     }
   }, [])
 
-  const CMD_LABEL = { send: '今すぐ送信', resend_range: '期間再送', catchup: '前日補完', ping: 'Ping', resend: '再送' }
+  const CMD_LABEL = { send: '今すぐ送信', resend_range: '期間再送', catchup: '前日補完', ping: 'Ping', resend: '再送', retask: 'タスク無画面化', self_update: '最新版に更新', pull_log: 'ログ取り寄せ', restart_services: 'サービス再起動', uninstall: 'アンインストール', set_config: '設定変更' }
+
+  const [diagId, setDiagId] = useState('')     // 実行結果を開いている device_id
+  const [diagRows, setDiagRows] = useState([]) // 直近コマンド結果
+  const [diagLoading, setDiagLoading] = useState(false)
+
+  const handleSelfUpdate = (device) => {
+    if (!window.confirm(`${device.name || device.email} を最新版に更新します。\nスクリプトを更新しタスクを無画面(pythonw)化して自動再起動します。よろしいですか？`)) return
+    sendCommand(device, 'self_update')
+  }
+
+  const handleUninstall = (device) => {
+    if (!window.confirm(`【注意】${device.name || device.email} から WorkScope を遠隔アンインストールします。\nタスク・常駐・インストールフォルダを削除します。元に戻すには再インストールが必要です。実行しますか？`)) return
+    if (!window.confirm('本当によろしいですか？この操作は取り消せません。')) return
+    sendCommand(device, 'uninstall')
+  }
+
+  const handleSetConfig = (device) => {
+    const cur = device.extra?.agent_poll_seconds
+    const min = window.prompt('巡回間隔（分）を入力してください（命令の反映速度／既定5分）', cur ? String(Math.round(cur / 60)) : '5')
+    if (!min) return
+    const n = parseInt(min, 10)
+    if (isNaN(n) || n < 1 || n > 120) { setCmdMsg('1〜120分で入力してください'); return }
+    sendCommand(device, 'set_config', { agent_poll_seconds: n * 60 })
+  }
+
+  // 端末の直近コマンド結果（pull_log の中身など）を取得して表示する
+  const toggleDiag = async (device) => {
+    if (diagId === device.device_id) { setDiagId(''); setDiagRows([]); return }
+    setDiagId(device.device_id); setDiagRows([]); setDiagLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/admin/workscope/commands`,
+        { ...authConfig(), params: { device_id: device.device_id } })
+      setDiagRows((data.commands || []).slice(0, 8))
+    } catch {
+      setDiagRows([])
+    } finally {
+      setDiagLoading(false)
+    }
+  }
 
   const sendCommand = async (device, cmd, args) => {
     setCmdBusy(device.device_id)
@@ -337,6 +376,17 @@ export default function WorkScopePage({ onBack }) {
                         <span>AW: {d.activity_ok == null ? '—' : d.activity_ok ? '応答' : '無応答'}</span>
                       </div>
 
+                      {/* インベントリ（heartbeat の extra から） */}
+                      {d.extra && (
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 mb-2">
+                          {d.extra.agent_version && <span>エージェント v{d.extra.agent_version}</span>}
+                          {d.extra.py_version && <span>Python {d.extra.py_version}</span>}
+                          {d.extra.free_gb != null && <span>空き {d.extra.free_gb}GB</span>}
+                          {d.extra.keylogger_running != null && <span>KLプロセス: {d.extra.keylogger_running ? '在' : '不在'}</span>}
+                          {d.extra.last_error && <span className="text-danger-400" title={d.extra.last_error}>最終エラーあり</span>}
+                        </div>
+                      )}
+
                       {/* アラート */}
                       {d.alerts?.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mb-3">
@@ -361,11 +411,58 @@ export default function WorkScopePage({ onBack }) {
                           <Button variant="ghost" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'ping')}>
                             Ping
                           </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'retask')} title="毎時のコンソール窓を消す（pythonw化）">
+                            タスク無画面化
+                          </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => handleSelfUpdate(d)} title="最新スクリプトを取得して更新・自動再起動">
+                            最新版に更新
+                          </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'pull_log')} title="端末のログ末尾を取り寄せて診断">
+                            ログ取り寄せ
+                          </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => sendCommand(d, 'restart_services')} title="キーロガー/ActivityWatch を再起動">
+                            サービス再起動
+                          </Button>
+                          <Button variant="secondary" size="sm" disabled={cmdBusy === d.device_id} onClick={() => handleSetConfig(d)} title="巡回間隔などを遠隔変更">
+                            設定変更
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => toggleDiag(d)} title="ログ取り寄せ等の実行結果を表示">
+                            {diagId === d.device_id ? '結果を閉じる' : '実行結果'}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={cmdBusy === d.device_id} onClick={() => handleUninstall(d)} title="遠隔アンインストール（取り消し不可）" className="text-danger-600">
+                            アンインストール
+                          </Button>
                         </div>
                       ) : (
                         <p className="text-xs text-slate-400">
                           監視のみ（自動で毎時送信）。遠隔操作は新インストーラー導入後に使えます。
                         </p>
+                      )}
+
+                      {/* 実行結果ビューア（pull_log の中身など） */}
+                      {diagId === d.device_id && (
+                        <div className="mt-3 rounded-lg border border-slate-200 dark:border-ink-700 bg-slate-50 dark:bg-ink-900 p-3">
+                          {diagLoading ? (
+                            <p className="text-xs text-slate-400">読み込み中…</p>
+                          ) : diagRows.length === 0 ? (
+                            <p className="text-xs text-slate-400">まだ実行結果はありません（命令は次回巡回で実行されます）</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {diagRows.map((c) => (
+                                <div key={c.id} className="text-xs">
+                                  <div className="flex items-center gap-2 text-slate-500">
+                                    <span className="font-semibold">{CMD_LABEL[c.cmd] || c.cmd}</span>
+                                    <Badge tone={c.status === 'done' ? 'success' : c.status === 'error' ? 'danger' : 'neutral'}>{c.status}</Badge>
+                                    <span>{fmtDateTime(c.created_at)}</span>
+                                  </div>
+                                  {c.result && (
+                                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-white dark:bg-ink-800 p-2 text-[11px] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-ink-700">{c.result}</pre>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
