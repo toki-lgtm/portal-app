@@ -1092,6 +1092,21 @@ function CardTable({ rows, sortKey, sortDir, onSort, catOf, onRowClick, onZoom }
 // 未分類グループ用のラベル（カテゴリ未設定の名刺をまとめる）
 const UNCATEGORIZED = '__uncat__'
 
+// 全社カテゴリの表示順（中原建設＝建築・土木ゼネコンに隣接する業種から順に。「その他」は最後）
+const CATEGORY_ORDER = [
+  '建設・土木', '設計・コンサル・測量', '専門工事・下請', '建設資材・商社',
+  '機械・重機・レンタル', '電気・通信・設備', '不動産', '官公庁・行政',
+  '金融・保険', '士業（税理士・法務等）', 'IT・システム', '運輸・物流',
+  '団体・組合・NPO', '教育・学校', '医療・福祉', '水産・漁業',
+  '飲食・宿泊・サービス', 'その他',
+]
+// 並び順ランク: 既知カテゴリは上記の位置 / 「その他」は必ず最後 / 未知（マイカテゴリ等）はその手前
+const catRank = (name) => {
+  if (name === 'その他') return 9999
+  const i = CATEGORY_ORDER.indexOf(name)
+  return i >= 0 ? i : 9000
+}
+
 // ─────────────────────────────────────────────────────────
 // メインページ
 // ─────────────────────────────────────────────────────────
@@ -1201,7 +1216,11 @@ export default function BusinessCardsPage({ onBack }) {
     }
     const list = [...counts.entries()]
       .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+      // 建設隣接順（その他は最後）。同ランク（マイカテゴリ等）は五十音順。
+      .sort((a, b) => {
+        const ra = catRank(a.name), rb = catRank(b.name)
+        return ra !== rb ? ra - rb : a.name.localeCompare(b.name, 'ja')
+      })
     return { catList: list, uncatCount: uncat }
   }, [cards, catOf])
 
