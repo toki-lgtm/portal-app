@@ -3,6 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, Mail, Plus, Pencil, Trash2, Loader2, Download, Search, AlertTriangle,
   FileSpreadsheet, CheckCircle2, XCircle, Clock, Paperclip, Upload, Sparkles, Circle, Wand2,
+  ChevronDown, ChevronRight, ListChecks,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -62,6 +63,23 @@ function Field({ label, type = 'text', value, onChange, options, hint, span1 }) 
 
 function SectionTitle({ children }) {
   return <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mt-4 mb-2 border-b border-slate-100 dark:border-ink-700 pb-1">{children}</h3>
+}
+
+// 折りたたみカード（工事管理の詳細と同じく、基本情報→各セクションが並ぶ構成に使う）
+function CollapsibleCard({ title, icon: Icon, defaultOpen = true, right, children }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <Card className="p-0 overflow-hidden mb-3">
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-slate-50/60 dark:hover:bg-ink-800/30">
+        {open ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />}
+        {Icon && <Icon className="w-4 h-4 text-brand-500 shrink-0" />}
+        <span className="text-sm font-bold text-slate-700 dark:text-slate-200 flex-1 min-w-0">{title}</span>
+        {right}
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </Card>
+  )
 }
 
 export default function PostOfficePage({ onBack }) {
@@ -406,56 +424,132 @@ export default function PostOfficePage({ onBack }) {
         {toast && <Toast toast={toast} />}
 
         <main className="max-w-5xl mx-auto px-6 py-6">
-          <Card className="p-5">
+          {/* ① 基本情報（案件の identity。一番上に置く） */}
+          <CollapsibleCard title="基本情報" icon={FileSpreadsheet} defaultOpen>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <Field label="年度" type="number" value={edit.fiscal_year} onChange={(v) => setEdit({ ...edit, fiscal_year: v })} />
-              <Field label="整理番号" type="number" value={edit.seq_no} onChange={(v) => setEdit({ ...edit, seq_no: v })} hint="空で自動採番" />
               <Field label="依頼状況" type="select" value={edit.status} onChange={(v) => setEdit({ ...edit, status: v })}
                 options={STATUS_ORDER.map((s) => ({ value: s, label: STATUS_META[s].label }))} />
-            </div>
-
-            <SectionTitle>依頼</SectionTitle>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <Field label="対応の種別" type="select" value={edit.response_type} onChange={(v) => setEdit({ ...edit, response_type: v })}
                 options={[{ value: '一般', label: '一般' }, { value: '緊急', label: '緊急' }]} />
               <Field label="区分" type="select" value={edit.category || ''} onChange={(v) => setEdit({ ...edit, category: v })}
                 options={[{ value: '', label: '（未設定）' }, { value: '旧郵便事業', label: '旧郵便事業' }, { value: '旧郵便局', label: '旧郵便局' }, { value: '社宅', label: '社宅' }]} />
-              <Field label="営繕サポート受付番号" value={edit.eizen_recv_no} onChange={(v) => setEdit({ ...edit, eizen_recv_no: v })} hint="7桁" />
-              <Field label="識別番号（見積発行番号）" value={edit.estimate_no} onChange={(v) => setEdit({ ...edit, estimate_no: v })} hint="例 25-0001" />
               <Field label="施設名称（局名/社宅）" value={edit.facility_name} onChange={(v) => setEdit({ ...edit, facility_name: v })} />
-              <Field label="見積依頼受付日" type="date" value={edit.request_recv_date} onChange={(v) => setEdit({ ...edit, request_recv_date: v })} />
+              <Field label="識別番号（見積発行番号）" value={edit.estimate_no} onChange={(v) => setEdit({ ...edit, estimate_no: v })} hint="例 25-0001" />
+              <Field label="営繕サポート受付番号" value={edit.eizen_recv_no} onChange={(v) => setEdit({ ...edit, eizen_recv_no: v })} hint="7桁" />
               <Field label="依頼者 所属・役職" value={edit.requester_org} onChange={(v) => setEdit({ ...edit, requester_org: v })} />
               <Field label="依頼者 氏名" value={edit.requester_name} onChange={(v) => setEdit({ ...edit, requester_name: v })} />
+              <Field label="担当" type="select" value={edit.assignee_id || ''} onChange={(v) => setEdit({ ...edit, assignee_id: v })} options={staffOptions} />
+              <Field label="契約金額（税込）" type="number" value={edit.contract_amount} onChange={(v) => setEdit({ ...edit, contract_amount: v })} />
+              <Field label="完成期限" type="date" value={edit.completion_deadline} onChange={(v) => setEdit({ ...edit, completion_deadline: v })}
+                hint={edit.completion_deadline_calc ? `自動: ${edit.completion_deadline_calc}` : '契約日+4ヶ月後20日'} />
+              <Field label="案件フォルダURL" value={edit.drive_folder_url} onChange={(v) => setEdit({ ...edit, drive_folder_url: v })} />
               <Field label="" type="checkbox" value={edit.is_pre_movein} onChange={(v) => setEdit({ ...edit, is_pre_movein: v })} hint="社宅入居前修繕" />
               <Field label="" type="checkbox" value={edit.is_policy_work} onChange={(v) => setEdit({ ...edit, is_policy_work: v })} hint="施策工事" />
             </div>
             <div className="mt-3"><Field label="工事内容" type="textarea" span1 value={edit.work_content} onChange={(v) => setEdit({ ...edit, work_content: v })} /></div>
-
-            <SectionTitle>見積</SectionTitle>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <Field label="郵便局等 連絡日" type="date" value={edit.first_contact_date} onChange={(v) => setEdit({ ...edit, first_contact_date: v })} />
-              <Field label="最終調査 指定日" type="date" value={edit.survey_designated_date} onChange={(v) => setEdit({ ...edit, survey_designated_date: v })} />
-              <Field label="最終調査 完了日" type="date" value={edit.survey_done_date} onChange={(v) => setEdit({ ...edit, survey_done_date: v })} />
-              <Field label="見積書 提出日" type="date" value={edit.estimate_submit_date} onChange={(v) => setEdit({ ...edit, estimate_submit_date: v })} />
-            </div>
             {edit.id && (
               <p className="text-xs text-slate-400 mt-2">
                 連絡までの営業日数：<b className={bizCls(edit.contact_bizdays, 2)}>{edit.contact_bizdays ?? '—'}</b>（目標2以下） ／
                 見積提出の営業日数：<b className={bizCls(edit.estimate_bizdays, 8)}>{edit.estimate_bizdays ?? '—'}</b>（目標8以下）
               </p>
             )}
+          </CollapsibleCard>
 
-            <SectionTitle>契約・工期確認</SectionTitle>
+          {/* ② 提出書類チェック / 添付ファイル（詳細の主役。フェーズ別に並ぶ） */}
+          {edit.id ? (
+            <CollapsibleCard title="提出書類チェック / 添付ファイル" icon={ListChecks} defaultOpen
+              right={<span className="text-xs text-slate-400 mr-1">添付 {caseFiles.length} 件</span>}>
+              {/* フェーズ別チェックリスト（提出済＝緑✓／未提出＝灰○。チップを押すとその種別で追加） */}
+              <div className="space-y-2">
+                {checklist.map((grp) => (
+                  <div key={grp.phase} className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 w-10 shrink-0">{grp.phase}</span>
+                    {grp.items.map((it) => (
+                      <button key={it.doc_type} type="button" onClick={() => triggerUpload(it.doc_type)} disabled={uploading}
+                        title={it.present ? `${it.doc_type}（${it.count}件）— 追加でアップロード` : `${it.doc_type} を追加`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs border transition ${it.present
+                          ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-500/15 dark:border-green-500/30 dark:text-green-300'
+                          : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-brand-300 dark:bg-ink-800 dark:border-ink-700'}`}>
+                        {it.present ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}
+                        {it.doc_type}{it.count > 1 ? ` ×${it.count}` : ''}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
+              {/* アップロード操作（種別を選ぶか、AIで自動判別） */}
+              <div className="flex flex-wrap items-center gap-2 mt-4">
+                <select value={uploadType} onChange={(e) => setUploadType(e.target.value)}
+                  className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2.5 py-1.5 text-xs">
+                  <option value="">AIで自動判別</option>
+                  {(docTypes.length ? docTypes : ['その他']).map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <input ref={fileInputRef} type="file" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCaseFile(f, pendingTypeRef.current); e.target.value = '' }} />
+                <Button variant="secondary" size="sm" disabled={uploading} onClick={() => triggerUpload(uploadType)}>
+                  {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}ファイルを追加
+                </Button>
+                <span className="text-[11px] text-slate-400">本体は共有ドライブに保存されます</span>
+              </div>
+
+              {/* 添付一覧 */}
+              <div className="mt-3">
+                {filesLoading ? (
+                  <div className="text-center py-4"><Loader2 className="w-5 h-5 animate-spin mx-auto text-brand-500" /></div>
+                ) : caseFiles.length === 0 ? (
+                  <p className="text-xs text-slate-400 flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />まだ添付ファイルはありません。</p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 dark:divide-ink-700 border border-slate-100 dark:border-ink-700 rounded-lg">
+                    {caseFiles.map((f) => (
+                      <li key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                        <Paperclip className="w-4 h-4 text-slate-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <a href={f.url} target="_blank" rel="noreferrer" className="truncate block text-slate-700 dark:text-slate-200 hover:text-brand-500">{f.file_name}</a>
+                          <div className="text-[11px] text-slate-400">
+                            {f.source === 'auto' && <span className="text-brand-500">AI判別 </span>}
+                            {(f.created_at || '').slice(0, 10)}
+                          </div>
+                        </div>
+                        <select value={f.doc_type} onChange={(e) => retypeFile(f.id, e.target.value)}
+                          className="rounded border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-800 px-1.5 py-1 text-[11px] max-w-[9rem]">
+                          {(docTypes.length ? docTypes : [f.doc_type]).map((d) => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <a href={f.url} target="_blank" rel="noreferrer" aria-label="ダウンロード" className="p-1 text-slate-400 hover:text-brand-500"><Download className="w-4 h-4" /></a>
+                        <button onClick={() => deleteCaseFile(f.id)} aria-label="削除" className="p-1 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CollapsibleCard>
+          ) : (
+            <Card className="p-4 mb-3">
+              <p className="text-xs text-slate-400 flex items-center gap-1">
+                <Paperclip className="w-3.5 h-3.5" />提出書類チェックと添付ファイルは、保存して案件を作成すると表示されます。
+              </p>
+            </Card>
+          )}
+
+          {/* ③ 日程・様式1-6の詳細（各フェーズの日付・工期確認・支社欄。折りたたみ） */}
+          <CollapsibleCard title="日程・様式1-6の詳細" icon={Clock} defaultOpen={!edit.id}>
+            <SectionTitle>見積</SectionTitle>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <Field label="見積依頼受付日" type="date" value={edit.request_recv_date} onChange={(v) => setEdit({ ...edit, request_recv_date: v })} />
+              <Field label="郵便局等 連絡日" type="date" value={edit.first_contact_date} onChange={(v) => setEdit({ ...edit, first_contact_date: v })} />
+              <Field label="最終調査 指定日" type="date" value={edit.survey_designated_date} onChange={(v) => setEdit({ ...edit, survey_designated_date: v })} />
+              <Field label="最終調査 完了日" type="date" value={edit.survey_done_date} onChange={(v) => setEdit({ ...edit, survey_done_date: v })} />
+              <Field label="見積書 提出日" type="date" value={edit.estimate_submit_date} onChange={(v) => setEdit({ ...edit, estimate_submit_date: v })} />
+            </div>
+
+            <SectionTitle>契約・工期確認（BPO）</SectionTitle>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <Field label="工事契約日" type="date" value={edit.contract_date} onChange={(v) => setEdit({ ...edit, contract_date: v })} />
-              <Field label="契約金額（税込）" type="number" value={edit.contract_amount} onChange={(v) => setEdit({ ...edit, contract_amount: v })} />
               <Field label="契約後 連絡日" type="date" value={edit.contract_contact_date} onChange={(v) => setEdit({ ...edit, contract_contact_date: v })} />
               <Field label="契約番号（BPO）" value={edit.contract_number} onChange={(v) => setEdit({ ...edit, contract_number: v })} />
               <Field label="営繕管理番号" value={edit.eizen_mgmt_no} onChange={(v) => setEdit({ ...edit, eizen_mgmt_no: v })} />
               <Field label="局番号" value={edit.office_number} onChange={(v) => setEdit({ ...edit, office_number: v })} />
               <Field label="査定額（税抜）" type="number" value={edit.assessed_amount} onChange={(v) => setEdit({ ...edit, assessed_amount: v })} />
-              <Field label="完成期限" type="date" value={edit.completion_deadline} onChange={(v) => setEdit({ ...edit, completion_deadline: v })}
-                hint={edit.completion_deadline_calc ? `自動: ${edit.completion_deadline_calc}（契約日+4ヶ月後20日）` : '契約日+4ヶ月後20日'} />
             </div>
 
             <SectionTitle>施工・完成・請求</SectionTitle>
@@ -467,87 +561,14 @@ export default function PostOfficePage({ onBack }) {
               <Field label="入金 確認日" type="date" value={edit.payment_date} onChange={(v) => setEdit({ ...edit, payment_date: v })} />
             </div>
 
-            <SectionTitle>管理</SectionTitle>
+            <SectionTitle>その他（管理欄）</SectionTitle>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <Field label="担当" type="select" value={edit.assignee_id || ''} onChange={(v) => setEdit({ ...edit, assignee_id: v })} options={staffOptions} />
+              <Field label="年度" type="number" value={edit.fiscal_year} onChange={(v) => setEdit({ ...edit, fiscal_year: v })} />
+              <Field label="整理番号" type="number" value={edit.seq_no} onChange={(v) => setEdit({ ...edit, seq_no: v })} hint="空で自動採番" />
               <Field label="分類コード（支社）" type="number" value={edit.classification_code} onChange={(v) => setEdit({ ...edit, classification_code: v })} hint="0〜4" />
-              <Field label="案件フォルダURL" value={edit.drive_folder_url} onChange={(v) => setEdit({ ...edit, drive_folder_url: v })} />
             </div>
             <div className="mt-3"><Field label="備考" type="textarea" span1 value={edit.remarks} onChange={(v) => setEdit({ ...edit, remarks: v })} /></div>
-
-            {edit.id ? (
-              <>
-                <SectionTitle>提出書類チェック / 添付ファイル</SectionTitle>
-                {/* フェーズ別チェックリスト（提出済＝緑✓／未提出＝灰○。チップを押すとその種別で追加） */}
-                <div className="space-y-1.5">
-                  {checklist.map((grp) => (
-                    <div key={grp.phase} className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[11px] font-medium text-slate-400 w-8 shrink-0">{grp.phase}</span>
-                      {grp.items.map((it) => (
-                        <button key={it.doc_type} type="button" onClick={() => triggerUpload(it.doc_type)} disabled={uploading}
-                          title={it.present ? `${it.doc_type}（${it.count}件）— 追加でアップロード` : `${it.doc_type} を追加`}
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs border transition ${it.present
-                            ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-500/15 dark:border-green-500/30 dark:text-green-300'
-                            : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-brand-300 dark:bg-ink-800 dark:border-ink-700'}`}>
-                          {it.present ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}
-                          {it.doc_type}{it.count > 1 ? ` ×${it.count}` : ''}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-
-                {/* アップロード操作（種別を選ぶか、AIで自動判別） */}
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <select value={uploadType} onChange={(e) => setUploadType(e.target.value)}
-                    className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2.5 py-1.5 text-xs">
-                    <option value="">AIで自動判別</option>
-                    {(docTypes.length ? docTypes : ['その他']).map((d) => <option key={d} value={d}>{d}</option>)}
-                  </select>
-                  <input ref={fileInputRef} type="file" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCaseFile(f, pendingTypeRef.current); e.target.value = '' }} />
-                  <Button variant="secondary" size="sm" disabled={uploading} onClick={() => triggerUpload(uploadType)}>
-                    {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}ファイルを追加
-                  </Button>
-                  <span className="text-[11px] text-slate-400">本体は共有ドライブに保存されます</span>
-                </div>
-
-                {/* 添付一覧 */}
-                <div className="mt-3">
-                  {filesLoading ? (
-                    <div className="text-center py-4"><Loader2 className="w-5 h-5 animate-spin mx-auto text-brand-500" /></div>
-                  ) : caseFiles.length === 0 ? (
-                    <p className="text-xs text-slate-400 flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />まだ添付ファイルはありません。</p>
-                  ) : (
-                    <ul className="divide-y divide-slate-100 dark:divide-ink-700 border border-slate-100 dark:border-ink-700 rounded-lg">
-                      {caseFiles.map((f) => (
-                        <li key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                          <Paperclip className="w-4 h-4 text-slate-400 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <a href={f.url} target="_blank" rel="noreferrer" className="truncate block text-slate-700 dark:text-slate-200 hover:text-brand-500">{f.file_name}</a>
-                            <div className="text-[11px] text-slate-400">
-                              {f.source === 'auto' && <span className="text-brand-500">AI判別 </span>}
-                              {(f.created_at || '').slice(0, 10)}
-                            </div>
-                          </div>
-                          <select value={f.doc_type} onChange={(e) => retypeFile(f.id, e.target.value)}
-                            className="rounded border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-800 px-1.5 py-1 text-[11px] max-w-[9rem]">
-                            {(docTypes.length ? docTypes : [f.doc_type]).map((d) => <option key={d} value={d}>{d}</option>)}
-                          </select>
-                          <a href={f.url} target="_blank" rel="noreferrer" aria-label="ダウンロード" className="p-1 text-slate-400 hover:text-brand-500"><Download className="w-4 h-4" /></a>
-                          <button onClick={() => deleteCaseFile(f.id)} aria-label="削除" className="p-1 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="text-xs text-slate-400 mt-4 flex items-center gap-1">
-                <Paperclip className="w-3.5 h-3.5" />添付ファイルと提出書類チェックは、保存して案件を作成すると表示されます。
-              </p>
-            )}
-          </Card>
+          </CollapsibleCard>
 
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="ghost" onClick={goBack}>キャンセル</Button>
