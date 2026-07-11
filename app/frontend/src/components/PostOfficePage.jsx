@@ -1,15 +1,15 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Mail, Plus, Pencil, Trash2, Loader2, Download, Search, AlertTriangle,
-  FileSpreadsheet, CheckCircle2, XCircle, Clock,
+  FileSpreadsheet, CheckCircle2, XCircle, Clock, Paperclip, Upload, Sparkles, Circle, Wand2,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import Toast from './ui/Toast'
 import ModalShell from './ui/ModalShell'
-import { API_URL as apiUrl, authConfig } from '../lib/api'
+import { API_URL as apiUrl, authConfig, authConfigMultipart } from '../lib/api'
 import { useToast } from '../lib/useToast'
 
 // 依頼状況の表示メタ（様式1-6の色分け：桃→緑→黄→青）
@@ -83,6 +83,16 @@ export default function PostOfficePage({ onBack }) {
   const [genBranch, setGenBranch] = useState('')
   const [generating, setGenerating] = useState(false)
   const [submissions, setSubmissions] = useState([])
+  // 添付ファイル / 提出書類チェックリスト（案件編集モーダル内）
+  const [caseFiles, setCaseFiles] = useState([])
+  const [checklist, setChecklist] = useState([])
+  const [docTypes, setDocTypes] = useState([])
+  const [filesLoading, setFilesLoading] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadType, setUploadType] = useState('')       // '' = AIで自動判別
+  // AIで起票（見積依頼メール/PDF → 新規案件プリフィル）
+  const [ingestOpen, setIngestOpen] = useState(false)
+  const [ingesting, setIngesting] = useState(false)
   const { toast, showToast } = useToast()
 
   const load = useCallback(async (year, status, type, search) => {
@@ -234,6 +244,103 @@ export default function PostOfficePage({ onBack }) {
     }
   }
 
+  // ── 案件の添付ファイル / 提出書類チェックリスト ─────────────────
+  const fileInputRef = useRef(null)
+  const pendingTypeRef = useRef('')          // チェックリストのチップから種別指定でアップロード
+  const triggerUpload = (docType) => { pendingTypeRef.current = docType || ''; fileInputRef.current?.click() }
+
+  const loadCaseFiles = useCallback(async (caseId) => {
+    setFilesLoading(true)
+    try {
+      const res = await axios.get(`${apiUrl}/api/post-office/cases/${caseId}/files`, authConfig())
+      setCaseFiles(res.data?.files || [])
+      setChecklist(res.data?.checklist || [])
+      setDocTypes(res.data?.doc_types || [])
+    } catch (e) {
+      setCaseFiles([]); setChecklist([])
+    } finally {
+      setFilesLoading(false)
+    }
+  }, [])
+
+  // 編集モーダルを開いた案件（既存）の添付を読み込む
+  useEffect(() => {
+    if (edit?.id) loadCaseFiles(edit.id)
+    else { setCaseFiles([]); setChecklist([]); setUploadType('') }
+  }, [edit?.id, loadCaseFiles])
+
+  const uploadCaseFile = async (file, docType) => {
+    if (!file || !edit?.id) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      if (docType) fd.append('doc_type', docType)
+      const { data } = await axios.post(`${apiUrl}/api/post-office/cases/${edit.id}/files`, fd, authConfigMultipart())
+      const cl = data?.classification
+      showToast('success', cl ? `「${data.file.doc_type}」として添付しました（AI判別）` : '添付しました')
+      await loadCaseFiles(edit.id)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '添付に失敗しました')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const retypeFile = async (fileId, docType) => {
+    try {
+      await axios.put(`${apiUrl}/api/post-office/case-files/${fileId}`, { doc_type: docType }, authConfig())
+      await loadCaseFiles(edit.id)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '種別の変更に失敗しました')
+    }
+  }
+
+  const deleteCaseFile = async (fileId) => {
+    if (!window.confirm('この添付ファイルを削除しますか？')) return
+    try {
+      await axios.delete(`${apiUrl}/api/post-office/case-files/${fileId}`, authConfig())
+      await loadCaseFiles(edit.id)
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '削除に失敗しました')
+    }
+  }
+
+  // ── AIで起票（見積依頼メール/PDF → 新規案件をプリフィル）─────────
+  const runIngest = async (files) => {
+    if (!files || !files.length) return
+    setIngesting(true)
+    try {
+      const fd = new FormData()
+      for (const f of files) fd.append('files', f)
+      const { data } = await axios.post(`${apiUrl}/api/post-office/extract-info`, fd, authConfigMultipart())
+      const f = data?.fields || {}
+      setIngestOpen(false)
+      // 抽出結果で新規案件フォームをプリフィル（空欄は既定値のまま）
+      setEdit({
+        fiscal_year: fy || new Date().getFullYear(), status: 'estimate_drafting',
+        area: '長崎県対馬エリア', company: '㈱中原建設',
+        is_pre_movein: false, is_policy_work: false,
+        response_type: f.response_type || '一般',
+        category: f.category || '',
+        facility_name: f.facility_name || '',
+        eizen_recv_no: f.eizen_recv_no || '',
+        estimate_no: f.estimate_no || '',
+        requester_org: f.requester_org || '',
+        requester_name: f.requester_name || '',
+        work_content: f.work_content || '',
+        request_recv_date: f.request_recv_date || '',
+        survey_designated_date: f.survey_designated_date || '',
+        remarks: f.remarks || '',
+      })
+      showToast('success', 'AIが読み取った内容をフォームに反映しました。確認して保存してください。')
+    } catch (e) {
+      showToast('error', e.response?.data?.error || 'AI読み取りに失敗しました')
+    } finally {
+      setIngesting(false)
+    }
+  }
+
   const staffOptions = [{ value: '', label: '（未設定）' }, ...staff.map((s) => ({ value: s.id, label: s.name }))]
 
   // 見積提出営業日数の色（目標8以下）
@@ -251,6 +358,7 @@ export default function PostOfficePage({ onBack }) {
           <div className="ml-auto flex items-center gap-2">
             <Button variant="secondary" size="sm" onClick={exportXlsx}><Download className="w-4 h-4" /><span className="hidden sm:inline">一覧をExcel出力</span></Button>
             <Button variant="secondary" size="sm" onClick={openGenerate}><FileSpreadsheet className="w-4 h-4" /><span className="hidden sm:inline">様式1-6を生成</span></Button>
+            <Button variant="secondary" size="sm" onClick={() => setIngestOpen(true)}><Wand2 className="w-4 h-4" /><span className="hidden sm:inline">AIで起票</span></Button>
             <Button variant="primary" size="sm" onClick={openNew}><Plus className="w-4 h-4" />案件を追加</Button>
           </div>
         </div>
@@ -430,6 +538,79 @@ export default function PostOfficePage({ onBack }) {
               <Field label="案件フォルダURL" value={edit.drive_folder_url} onChange={(v) => setEdit({ ...edit, drive_folder_url: v })} />
             </div>
             <div className="mt-3"><Field label="備考" type="textarea" span1 value={edit.remarks} onChange={(v) => setEdit({ ...edit, remarks: v })} /></div>
+
+            {edit.id ? (
+              <>
+                <SectionTitle>提出書類チェック / 添付ファイル</SectionTitle>
+                {/* フェーズ別チェックリスト（提出済＝緑✓／未提出＝灰○。チップを押すとその種別で追加） */}
+                <div className="space-y-1.5">
+                  {checklist.map((grp) => (
+                    <div key={grp.phase} className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-medium text-slate-400 w-8 shrink-0">{grp.phase}</span>
+                      {grp.items.map((it) => (
+                        <button key={it.doc_type} type="button" onClick={() => triggerUpload(it.doc_type)} disabled={uploading}
+                          title={it.present ? `${it.doc_type}（${it.count}件）— 追加でアップロード` : `${it.doc_type} を追加`}
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs border transition ${it.present
+                            ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-500/15 dark:border-green-500/30 dark:text-green-300'
+                            : 'bg-slate-50 border-slate-200 text-slate-400 hover:border-brand-300 dark:bg-ink-800 dark:border-ink-700'}`}>
+                          {it.present ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}
+                          {it.doc_type}{it.count > 1 ? ` ×${it.count}` : ''}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                {/* アップロード操作（種別を選ぶか、AIで自動判別） */}
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <select value={uploadType} onChange={(e) => setUploadType(e.target.value)}
+                    className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-2.5 py-1.5 text-xs">
+                    <option value="">AIで自動判別</option>
+                    {(docTypes.length ? docTypes : ['その他']).map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                  <input ref={fileInputRef} type="file" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCaseFile(f, pendingTypeRef.current); e.target.value = '' }} />
+                  <Button variant="secondary" size="sm" disabled={uploading} onClick={() => triggerUpload(uploadType)}>
+                    {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}ファイルを追加
+                  </Button>
+                  <span className="text-[11px] text-slate-400">本体は共有ドライブに保存されます</span>
+                </div>
+
+                {/* 添付一覧 */}
+                <div className="mt-3">
+                  {filesLoading ? (
+                    <div className="text-center py-4"><Loader2 className="w-5 h-5 animate-spin mx-auto text-brand-500" /></div>
+                  ) : caseFiles.length === 0 ? (
+                    <p className="text-xs text-slate-400 flex items-center gap-1"><Paperclip className="w-3.5 h-3.5" />まだ添付ファイルはありません。</p>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 dark:divide-ink-700 border border-slate-100 dark:border-ink-700 rounded-lg">
+                      {caseFiles.map((f) => (
+                        <li key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                          <Paperclip className="w-4 h-4 text-slate-400 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <a href={f.url} target="_blank" rel="noreferrer" className="truncate block text-slate-700 dark:text-slate-200 hover:text-brand-500">{f.file_name}</a>
+                            <div className="text-[11px] text-slate-400">
+                              {f.source === 'auto' && <span className="text-brand-500">AI判別 </span>}
+                              {(f.created_at || '').slice(0, 10)}
+                            </div>
+                          </div>
+                          <select value={f.doc_type} onChange={(e) => retypeFile(f.id, e.target.value)}
+                            className="rounded border border-slate-200 dark:border-ink-600 bg-white dark:bg-ink-800 px-1.5 py-1 text-[11px] max-w-[9rem]">
+                            {(docTypes.length ? docTypes : [f.doc_type]).map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                          <a href={f.url} target="_blank" rel="noreferrer" aria-label="ダウンロード" className="p-1 text-slate-400 hover:text-brand-500"><Download className="w-4 h-4" /></a>
+                          <button onClick={() => deleteCaseFile(f.id)} aria-label="削除" className="p-1 text-slate-400 hover:text-danger-500"><Trash2 className="w-4 h-4" /></button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-slate-400 mt-4 flex items-center gap-1">
+                <Paperclip className="w-3.5 h-3.5" />添付ファイルと提出書類チェックは、保存して案件を作成すると表示されます。
+              </p>
+            )}
           </div>
 
           <div className="flex justify-end gap-2 pt-4 mt-2 border-t border-slate-100 dark:border-ink-700">
@@ -490,6 +671,27 @@ export default function PostOfficePage({ onBack }) {
                 })}
               </ul>
             )}
+          </div>
+        </ModalShell>
+      )}
+
+      {ingestOpen && (
+        <ModalShell title="AIで案件を起票" onClose={() => !ingesting && setIngestOpen(false)}>
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              見積依頼メール（PDF化したもの）や緊急修繕依頼書・現況写真などを読み込ませると、
+              施設名・工事内容・依頼者・受付日などをAIが読み取り、新規案件フォームにプリフィルします。
+            </p>
+            <label className={`mt-4 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center cursor-pointer transition ${ingesting ? 'opacity-60 pointer-events-none' : 'border-slate-300 dark:border-ink-600 hover:border-brand-400'}`}>
+              {ingesting ? <Loader2 className="w-8 h-8 animate-spin text-brand-500" /> : <Sparkles className="w-8 h-8 text-brand-500" />}
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{ingesting ? 'AIが読み取り中…' : 'PDF・画像を選択（複数可）'}</span>
+              <span className="text-[11px] text-slate-400">PDF / JPG / PNG に対応。読み取れない項目は空欄のままになります。</span>
+              <input type="file" multiple accept=".pdf,image/*" className="hidden" disabled={ingesting}
+                onChange={(e) => { const fs = Array.from(e.target.files || []); if (fs.length) runIngest(fs); e.target.value = '' }} />
+            </label>
+            <div className="flex justify-end gap-2 pt-4">
+              <Button variant="ghost" onClick={() => setIngestOpen(false)} disabled={ingesting}>閉じる</Button>
+            </div>
           </div>
         </ModalShell>
       )}
