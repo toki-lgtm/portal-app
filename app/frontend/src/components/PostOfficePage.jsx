@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import {
   ArrowLeft, Mail, Plus, Pencil, Trash2, Loader2, Download, Search, AlertTriangle,
+  FileSpreadsheet, CheckCircle2, XCircle, Clock,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -76,6 +77,12 @@ export default function PostOfficePage({ onBack }) {
   const [staff, setStaff] = useState([])
   const [edit, setEdit] = useState(null)
   const [saving, setSaving] = useState(false)
+  // 様式1-6 生成
+  const [genOpen, setGenOpen] = useState(false)
+  const [genDate, setGenDate] = useState('')
+  const [genBranch, setGenBranch] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [submissions, setSubmissions] = useState([])
   const { toast, showToast } = useToast()
 
   const load = useCallback(async (year, status, type, search) => {
@@ -173,6 +180,60 @@ export default function PostOfficePage({ onBack }) {
     }
   }
 
+  // ── 様式1-6 正式自動生成 ────────────────────────────────
+  const loadSubmissions = useCallback(async (year) => {
+    try {
+      const res = await axios.get(`${apiUrl}/api/post-office/submissions?fiscal_year=${year}`, authConfig())
+      setSubmissions(res.data?.submissions || [])
+    } catch { /* 一覧取得失敗は致命ではない */ }
+  }, [])
+
+  const openGenerate = () => {
+    setGenDate(new Date().toISOString().slice(0, 10))  // 既定＝本日（毎月10日に提出）
+    setGenBranch('')
+    setGenOpen(true)
+    loadSubmissions(fy)
+  }
+
+  const downloadSubmission = async (id, name) => {
+    const res = await axios.get(`${apiUrl}/api/post-office/submissions/${id}/download`, { ...authConfig(), responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url; a.download = name || '様式1-6.xlsx'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const runGenerate = async () => {
+    setGenerating(true)
+    try {
+      const { data } = await axios.post(`${apiUrl}/api/post-office/submissions`,
+        { fiscal_year: fy, report_date: genDate, branch: genBranch || undefined }, authConfig())
+      showToast('info', `生成を開始しました（${data.case_count}件）。少々お待ちください…`)
+      await loadSubmissions(fy)
+      // 状態ポーリング（最大約90秒）。done で自動ダウンロード。
+      const id = data.id
+      let ready = false
+      for (let i = 0; i < 36 && !ready; i++) {
+        await new Promise((r) => setTimeout(r, 2500))
+        try {
+          const s = await axios.get(`${apiUrl}/api/post-office/submissions/${id}/status`, authConfig())
+          if (s.data?.status === 'error') { showToast('error', `生成に失敗しました：${s.data.message || ''}`); break }
+          if (s.data?.ready) {
+            ready = true
+            await loadSubmissions(fy)
+            await downloadSubmission(id, s.data.file)
+            showToast('success', '様式1-6を生成しました')
+          }
+        } catch { /* ポーリング一時失敗は継続 */ }
+      }
+      if (!ready) { await loadSubmissions(fy); showToast('info', '生成に時間がかかっています。数分後に「生成履歴」からダウンロードしてください。') }
+    } catch (e) {
+      showToast('error', e.response?.data?.error || '生成の開始に失敗しました')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   const staffOptions = [{ value: '', label: '（未設定）' }, ...staff.map((s) => ({ value: s.id, label: s.name }))]
 
   // 見積提出営業日数の色（目標8以下）
@@ -189,6 +250,7 @@ export default function PostOfficePage({ onBack }) {
           </div>
           <div className="ml-auto flex items-center gap-2">
             <Button variant="secondary" size="sm" onClick={exportXlsx}><Download className="w-4 h-4" /><span className="hidden sm:inline">一覧をExcel出力</span></Button>
+            <Button variant="secondary" size="sm" onClick={openGenerate}><FileSpreadsheet className="w-4 h-4" /><span className="hidden sm:inline">様式1-6を生成</span></Button>
             <Button variant="primary" size="sm" onClick={openNew}><Plus className="w-4 h-4" />案件を追加</Button>
           </div>
         </div>
@@ -294,7 +356,7 @@ export default function PostOfficePage({ onBack }) {
         )}
 
         <p className="text-xs text-slate-400 mt-6">
-          営業日数は会社カレンダー（公休日）を用いた目安です。毎月10日提出の様式1-6は「一覧をExcel出力」で列データを取得できます（正式様式への自動流し込みは次段階で対応予定）。
+          営業日数は会社カレンダー（公休日）を用いた目安です。毎月10日提出の様式1-6は「様式1-6を生成」で、数式・色分け・集計シート付きの正式様式を自動生成できます（案件データから転記ゼロ）。
         </p>
       </main>
 
@@ -375,6 +437,59 @@ export default function PostOfficePage({ onBack }) {
             <Button variant="primary" onClick={save} disabled={saving}>
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}保存
             </Button>
+          </div>
+        </ModalShell>
+      )}
+
+      {genOpen && (
+        <ModalShell title="様式1-6 見積書・工事受注一覧表 を生成" onClose={() => !generating && setGenOpen(false)}>
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              {fy}年度の案件（{cases.length}件）から、公式書式（数式・色分け・集計シート付き）を自動生成します。
+            </p>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <Field label="報告日（様式の日付）" type="date" value={genDate} onChange={setGenDate} hint="通常は提出日（毎月10日）" />
+              <Field label="担当支社（任意）" value={genBranch} onChange={setGenBranch} hint="例: 九州支社。空でテンプレ既定" />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4 mt-2">
+              <Button variant="ghost" onClick={() => setGenOpen(false)} disabled={generating}>閉じる</Button>
+              <Button variant="primary" onClick={runGenerate} disabled={generating || cases.length === 0}>
+                {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+                {generating ? '生成中…' : '生成する'}
+              </Button>
+            </div>
+
+            <SectionTitle>生成履歴</SectionTitle>
+            {submissions.length === 0 ? (
+              <p className="text-xs text-slate-400">まだ生成履歴はありません。</p>
+            ) : (
+              <ul className="divide-y divide-slate-100 dark:divide-ink-700">
+                {submissions.map((s) => {
+                  const st = s.status === 'done'
+                    ? <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400"><CheckCircle2 className="w-3.5 h-3.5" />完了</span>
+                    : s.status === 'error'
+                      ? <span className="inline-flex items-center gap-1 text-danger-600 dark:text-danger-400"><XCircle className="w-3.5 h-3.5" />失敗</span>
+                      : <span className="inline-flex items-center gap-1 text-slate-500"><Clock className="w-3.5 h-3.5 animate-pulse" />{s.status === 'processing' ? '生成中' : '待機中'}</span>
+                  return (
+                    <li key={s.id} className="flex items-center gap-3 py-2 text-sm">
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate text-slate-700 dark:text-slate-200">{s.output_name || `様式1-6_${s.fiscal_year}`}</div>
+                        <div className="text-[11px] text-slate-400">
+                          {(s.created_at || '').slice(0, 16).replace('T', ' ')} ／ {s.case_count ?? '—'}件
+                          {s.status === 'error' && s.message ? ` ／ ${s.message}` : ''}
+                        </div>
+                      </div>
+                      {st}
+                      {s.status === 'done' && (
+                        <button onClick={() => downloadSubmission(s.id, s.output_name)} aria-label="ダウンロード"
+                          className="p-1.5 text-brand-500 hover:text-brand-600"><Download className="w-4 h-4" /></button>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
           </div>
         </ModalShell>
       )}
