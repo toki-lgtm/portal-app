@@ -102,7 +102,22 @@ const EMPTY_FORM = {
   qualifications: '',
   note: '',
   visibility: 'shared',  // (2) デフォルトを全社共有に変更
+  shared_with: [],       // 限定公開(restricted)のときの共有先メール配列
   category: '',
+}
+
+// 公開範囲のラベル・色・共有先を求める（誰に公開されているかの表示に使う）
+// shared=全社共有 / restricted=限定公開（選ばれた人だけ）/ private=個人のみ
+function visInfo(card) {
+  const v = card?.visibility
+  if (v === 'restricted') {
+    const names = (Array.isArray(card.shared_with_names) && card.shared_with_names.length)
+      ? card.shared_with_names
+      : (Array.isArray(card.shared_with) ? card.shared_with : [])
+    return { key: 'restricted', label: '限定公開', tone: 'warning', recipients: names }
+  }
+  if (v === 'private') return { key: 'private', label: '個人のみ', tone: 'neutral', recipients: [] }
+  return { key: 'shared', label: '全社共有', tone: 'info', recipients: [] }
 }
 
 // ─────────────────────────────────────────────────────────
@@ -131,8 +146,25 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
       qualifications: pick(item.qualifications),
       note: pick(item.note),
       visibility: item.visibility || 'shared',
+      shared_with: Array.isArray(item.shared_with) ? item.shared_with.map((e) => String(e).toLowerCase()) : [],
       category: pick(item.category),
     }
+  })
+  // 限定公開の共有先に選べる社員一覧（在籍者）と絞り込みクエリ
+  const [people, setPeople] = useState([])
+  const [peopleQuery, setPeopleQuery] = useState('')
+  useEffect(() => {
+    let ok = true
+    axios.get(`${apiUrl}/api/cards/people`, authConfig())
+      .then((res) => { if (ok) setPeople(res.data || []) })
+      .catch(() => {})
+    return () => { ok = false }
+  }, [])
+  // 共有先チェックのトグル
+  const toggleShare = (email) => setForm((f) => {
+    const sel = new Set(f.shared_with || [])
+    if (sel.has(email)) sel.delete(email); else sel.add(email)
+    return { ...f, shared_with: [...sel] }
   })
   const [saving, setSaving] = useState(false)
   const [imageFile, setImageFile] = useState(null)        // 新しく選択した表面画像
@@ -305,6 +337,8 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
       // (3) category を追加したフィールドリストで送信
       const fields = ['full_name','company','department','title','phone','mobile','email','fax','postal_code','address','website','qualifications','note','visibility','category']
       for (const k of fields) fd.append(k, form[k])
+      // 限定公開のときだけ共有先を送る（それ以外は空配列＝サーバ側で無視）
+      fd.append('shared_with', JSON.stringify(form.visibility === 'restricted' ? (form.shared_with || []) : []))
 
       if (isNew) {
         await axios.post(`${apiUrl}/api/cards`, fd, authConfigMultipart())
@@ -535,10 +569,51 @@ function CardFormModal({ item, mode, onClose, onSaved, showToast, onMulti }) {
 
         <Field label="公開範囲">
           <select className={inputCls} value={form.visibility} onChange={(e) => set('visibility', e.target.value)}>
-            <option value="shared">全社共有</option>
+            <option value="shared">全社共有（全員が閲覧可）</option>
+            <option value="restricted">限定公開（選んだ人だけ）</option>
             <option value="private">個人のみ（自分だけ閲覧可）</option>
           </select>
         </Field>
+
+        {/* 限定公開: 共有する社員を選ぶピッカー（登録者本人は常に閲覧可） */}
+        {form.visibility === 'restricted' && (
+          <div className="rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/10 p-3">
+            <p className="text-xs font-bold text-amber-700 dark:text-amber-300 mb-2">
+              公開する相手を選択（あなた自身は常に閲覧できます）
+            </p>
+            <input
+              className={inputCls + ' mb-2'}
+              value={peopleQuery}
+              onChange={(e) => setPeopleQuery(e.target.value)}
+              placeholder="名前・部署で絞り込み"
+            />
+            <div className="max-h-48 overflow-y-auto rounded-lg border border-amber-200/70 dark:border-amber-500/20 bg-white dark:bg-ink-800 divide-y divide-slate-100 dark:divide-ink-700">
+              {people
+                .filter((p) => {
+                  const qq = peopleQuery.trim().toLowerCase()
+                  if (!qq) return true
+                  return (p.name || '').toLowerCase().includes(qq) || (p.department || '').toLowerCase().includes(qq)
+                })
+                .map((p) => {
+                  const checked = (form.shared_with || []).includes(p.email)
+                  return (
+                    <label key={p.email} className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-500/10">
+                      <input type="checkbox" className="accent-amber-600" checked={checked} onChange={() => toggleShare(p.email)} />
+                      <span className="text-slate-800 dark:text-slate-200">{p.name}</span>
+                      {p.department && <span className="text-xs text-slate-400 dark:text-slate-500">{p.department}</span>}
+                    </label>
+                  )
+                })}
+              {people.length === 0 && (
+                <p className="px-3 py-2 text-xs text-slate-400">社員一覧を読み込み中…</p>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5">
+              選択中: {(form.shared_with || []).length}名
+              {(form.shared_with || []).length === 0 && '（0名のまま保存すると「個人のみ」になります）'}
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="flex justify-end gap-2 mt-6">
@@ -808,9 +883,7 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
             </div>
           )}
           <div className="mt-2 flex flex-wrap justify-center gap-1">
-            <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
-              {card.visibility === 'shared' ? '全社共有' : '個人'}
-            </Badge>
+            <Badge tone={visInfo(card).tone}>{visInfo(card).label}</Badge>
             {/* (3) カテゴリバッジ */}
             {card.category && (
               <Badge tone="warning">
@@ -920,9 +993,24 @@ function CardDetailModal({ card, isAdmin, currentUserEmail, onClose, onEdit, onD
         </div>
       </div>
 
-      <p className="text-xs text-slate-400 dark:text-slate-500 mt-3">
+      {/* 公開範囲の詳細（誰に公開されているか） */}
+      <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+        {card.visibility === 'restricted' ? (
+          <p>
+            <span className="font-bold text-amber-600 dark:text-amber-400">限定公開</span>{' '}
+            — 公開先: {(visInfo(card).recipients.length ? visInfo(card).recipients : ['(未設定)']).join('、')}
+            {card.owner_name ? `（登録者 ${card.owner_name} も閲覧可）` : ''}
+          </p>
+        ) : card.visibility === 'private' ? (
+          <p>この名刺は登録者本人だけが閲覧できます</p>
+        ) : (
+          <p>全社員が閲覧できます</p>
+        )}
+      </div>
+
+      <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
         登録: {fmtDate(card.created_at)}
-        {card.owner_email ? ` ・ 登録者: ${card.owner_email}` : ''}
+        {card.owner_name ? ` ・ 登録者: ${card.owner_name}` : (card.owner_email ? ` ・ 登録者: ${card.owner_email}` : '')}
       </p>
 
       {canEdit && (
@@ -992,9 +1080,11 @@ function CardTile({ card, onClick }) {
 
       {/* バッジ */}
       <div className="mt-auto pt-1 flex flex-wrap gap-1">
-        <Badge tone={card.visibility === 'shared' ? 'info' : 'neutral'}>
-          {card.visibility === 'shared' ? '全社共有' : '個人'}
-        </Badge>
+        {(() => {
+          const vi = visInfo(card)
+          const suffix = vi.key === 'restricted' && vi.recipients.length ? `(${vi.recipients.length})` : ''
+          return <Badge tone={vi.tone}>{vi.label}{suffix}</Badge>
+        })()}
         {card.back_image_url && (
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-ink-700 text-slate-500 dark:text-slate-400">両面</span>
         )}
