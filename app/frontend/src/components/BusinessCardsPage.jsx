@@ -1223,19 +1223,30 @@ export default function BusinessCardsPage({ onBack }) {
   useEffect(() => { localStorage.setItem('cardsViewMode', viewMode) }, [viewMode])
 
 
+  // 検索入力はディバウンス（打鍵ごとの多重リクエストを抑える）
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // 古い応答が新しい検索結果を上書きして「全件に戻る」のを防ぐ通し番号
+  const reqSeq = useRef(0)
   const loadCards = useCallback(async () => {
+    const myReq = ++reqSeq.current
     try {
       const params = new URLSearchParams()
-      if (search.trim()) params.set('q', search.trim())
+      if (debouncedSearch.trim()) params.set('q', debouncedSearch.trim())
       if (scope) params.set('scope', scope)
       const res = await axios.get(`${apiUrl}/api/cards?${params}`, authConfig())
+      if (myReq !== reqSeq.current) return   // 自分より新しい問い合わせが出ていたら破棄
       setCards(res.data)
     } catch {
-      showToast('error', '名刺一覧の取得に失敗しました')
+      if (myReq === reqSeq.current) showToast('error', '名刺一覧の取得に失敗しました')
     } finally {
-      setLoading(false)
+      if (myReq === reqSeq.current) setLoading(false)
     }
-  }, [search, scope, showToast])
+  }, [debouncedSearch, scope, showToast])
 
   useEffect(() => {
     setLoading(true)
