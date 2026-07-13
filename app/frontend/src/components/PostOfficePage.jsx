@@ -620,7 +620,7 @@ export default function PostOfficePage({ onBack }) {
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <select value={fy || ''} onChange={(e) => { const y = Number(e.target.value); setFy(y); load(y, filterStatus, filterType, q) }}
             className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm font-bold">
-            {years.map((y) => <option key={y} value={y}>{y}年度</option>)}
+            {years.map((y) => <option key={y} value={y}>{y === 2000 ? '旧書式（2022〜2025.9）' : `${y}年度`}</option>)}
           </select>
           <select value={filterStatus} onChange={(e) => { setFilterStatus(e.target.value); load(fy, e.target.value, filterType, q) }}
             className="rounded-lg border border-slate-300 dark:border-ink-600 bg-white dark:bg-ink-800 px-3 py-2 text-sm">
