@@ -28,6 +28,9 @@ const APP_LABELS = {
   'workscope': 'WorkScope導入',
   'construction': '工事管理',
   'cards': '名刺管理',
+  'quote_compare': '見積比較',
+  'exam-prep': '資格学習',
+  'post-office': '郵便局 年間指名',
 }
 const APP_KEYS = Object.keys(APP_LABELS)
 
