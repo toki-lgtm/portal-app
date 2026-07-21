@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   ArrowLeft, GraduationCap, Check, X, ChevronRight, Loader2,
   RefreshCw, Trophy, AlertTriangle, BookOpen, Target, Sparkles, BarChart3,
-  Library, FileText,
+  Library, FileText, Users, Settings,
 } from 'lucide-react'
 import Button from './ui/Button'
 import Card from './ui/Card'
@@ -58,6 +58,13 @@ export default function ExamPage({ onBack }) {
   const [matReading, setMatReading] = useState(null) // { chapter_no, chapter_title, sections[] }
   const [matLoading, setMatLoading] = useState(false)
 
+  // 科目アクセス管理（管理者のみ）
+  const [isExamAdmin, setIsExamAdmin] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
+  const [adminData, setAdminData] = useState(null) // { subjects, staff, access }
+  const [adminLoading, setAdminLoading] = useState(false)
+  const [savingKey, setSavingKey] = useState(null) // 保存中セルの識別子
+
   // 科目一覧を取得（自動選択はせず、まず科目選択画面を出す）
   useEffect(() => {
     ;(async () => {
@@ -70,6 +77,69 @@ export default function ExamPage({ onBack }) {
         setLoading(false)
       }
     })()
+  }, [showToast])
+
+  // 自分が資格学習の管理者か（科目アクセス管理ボタンの表示判定）
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const { data } = await axios.get(`${apiUrl}/api/my-permissions`, authConfig())
+        setIsExamAdmin(data?.role === 'admin' || data?.apps?.['exam-prep'] === 'admin')
+      } catch {
+        setIsExamAdmin(false)
+      }
+    })()
+  }, [])
+
+  // 科目アクセス管理データを取得して管理画面へ
+  const openAdmin = useCallback(async () => {
+    setShowAdmin(true); setAdminLoading(true)
+    try {
+      const { data } = await axios.get(`${apiUrl}/api/exam/admin/access`, authConfig())
+      setAdminData(data)
+    } catch (e) {
+      showToast('error', '管理データの取得に失敗しました')
+      setShowAdmin(false)
+    } finally {
+      setAdminLoading(false)
+    }
+  }, [showToast])
+
+  // 科目アクセス（2層目）の付与/剥奪
+  const toggleSubjectAccess = useCallback(async (staffId, subjId, grant) => {
+    setSavingKey(`s:${staffId}:${subjId}`)
+    try {
+      await axios.post(`${apiUrl}/api/exam/admin/access`,
+        { staff_id: staffId, subject_id: subjId, grant }, authConfig())
+      setAdminData((prev) => ({
+        ...prev,
+        access: grant
+          ? [...prev.access, { staff_id: staffId, subject_id: subjId }]
+          : prev.access.filter((a) => !(a.staff_id === staffId && a.subject_id === subjId)),
+      }))
+    } catch (e) {
+      showToast('error', '更新に失敗しました')
+    } finally {
+      setSavingKey(null)
+    }
+  }, [showToast])
+
+  // アプリ利用可（1層目 exam-prep）の付与/剥奪
+  const toggleAppAccess = useCallback(async (staffId, grant) => {
+    setSavingKey(`a:${staffId}`)
+    try {
+      await axios.post(`${apiUrl}/api/exam/admin/app-access`,
+        { staff_id: staffId, grant }, authConfig())
+      setAdminData((prev) => ({
+        ...prev,
+        staff: prev.staff.map((s) =>
+          s.id === staffId ? { ...s, app_level: grant ? (s.app_level || 'member') : null } : s),
+      }))
+    } catch (e) {
+      showToast('error', '更新に失敗しました')
+    } finally {
+      setSavingKey(null)
+    }
   }, [showToast])
 
   // 選択科目の章一覧
@@ -262,12 +332,106 @@ export default function ExamPage({ onBack }) {
     )
   }
 
+  // 科目アクセス管理（管理者のみ）
+  if (!subjectId && showAdmin) {
+    const hasSubj = (staffId, subjId) =>
+      !!adminData?.access?.some((a) => a.staff_id === staffId && a.subject_id === subjId)
+    return (
+      <div className="max-w-5xl mx-auto p-4">
+        <Header title="科目アクセス管理" onBackClick={() => setShowAdmin(false)} />
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+          資格学習は<strong>2段階の権限</strong>です。まず「利用可」でアプリに入れるようにし、
+          さらに<strong>学べる資格（科目）ごと</strong>にチェックを付けてください。両方そろって初めて学習できます。
+        </p>
+        {adminLoading || !adminData ? (
+          <div className="flex items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin mr-2" /> 読み込み中…
+          </div>
+        ) : (
+          <Card className="p-0 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-ink-700 text-left text-slate-500 dark:text-slate-400">
+                  <th className="py-3 px-4 font-semibold sticky left-0 bg-white dark:bg-ink-900 whitespace-nowrap">社員</th>
+                  <th className="py-3 px-3 font-semibold text-center whitespace-nowrap">利用可</th>
+                  {adminData.subjects.map((s) => (
+                    <th key={s.id} className="py-3 px-3 font-semibold text-center whitespace-nowrap min-w-[7rem]">{s.name}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {adminData.staff.map((st) => {
+                  const appOn = !!st.app_level
+                  const savingApp = savingKey === `a:${st.id}`
+                  return (
+                    <tr key={st.id} className="border-b border-slate-100 dark:border-ink-800 hover:bg-slate-50 dark:hover:bg-ink-800/40">
+                      <td className="py-2.5 px-4 sticky left-0 bg-white dark:bg-ink-900 whitespace-nowrap">
+                        <div className="font-medium text-slate-800 dark:text-slate-100">{st.name}</div>
+                        {st.department && <div className="text-xs text-slate-400">{st.department}</div>}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <button
+                          onClick={() => toggleAppAccess(st.id, !appOn)}
+                          disabled={savingApp}
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition ${
+                            appOn
+                              ? 'bg-brand-600 border-brand-600 text-white'
+                              : 'border-slate-300 dark:border-ink-600 text-transparent hover:border-brand-400'
+                          }`}
+                          title={appOn ? '利用可（クリックで解除）' : '利用不可（クリックで付与）'}>
+                          {savingApp ? <Loader2 size={14} className="animate-spin text-slate-400" /> : <Check size={16} />}
+                        </button>
+                      </td>
+                      {adminData.subjects.map((s) => {
+                        const on = hasSubj(st.id, s.id)
+                        const saving = savingKey === `s:${st.id}:${s.id}`
+                        return (
+                          <td key={s.id} className="py-2.5 px-3 text-center">
+                            <button
+                              onClick={() => toggleSubjectAccess(st.id, s.id, !on)}
+                              disabled={saving}
+                              className={`inline-flex items-center justify-center w-6 h-6 rounded-md border transition ${
+                                on
+                                  ? 'bg-success-600 border-success-600 text-white'
+                                  : 'border-slate-300 dark:border-ink-600 text-transparent hover:border-success-400'
+                              }`}
+                              title={on ? '許可中（クリックで解除）' : '未許可（クリックで付与）'}>
+                              {saving ? <Loader2 size={14} className="animate-spin text-slate-400" /> : <Check size={16} />}
+                            </button>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </Card>
+        )}
+        {!adminLoading && adminData && (
+          <p className="text-xs text-slate-400 mt-3">
+            <span className="inline-block w-3 h-3 rounded bg-brand-600 align-middle mr-1" />利用可（アプリに入れる）
+            <span className="inline-block w-3 h-3 rounded bg-success-600 align-middle mr-1 ml-2" />科目アクセス（その資格を学べる）
+          </p>
+        )}
+        {toast && <Toast toast={toast} />}
+      </div>
+    )
+  }
+
   // 科目未選択 → 科目選択画面（資格学習の入口）
   if (!subjectId) {
     return (
       <div className="max-w-3xl mx-auto p-4">
         <Header title="資格学習" onBackClick={onBack} />
-        <h2 className="font-semibold text-slate-700 dark:text-slate-200 mb-3">学習する資格を選んでください</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-slate-700 dark:text-slate-200">学習する資格を選んでください</h2>
+          {isExamAdmin && (
+            <Button variant="secondary" size="sm" onClick={openAdmin} className="shrink-0">
+              <Settings size={15} className="mr-1" /> 科目アクセス管理
+            </Button>
+          )}
+        </div>
         {subjects.length === 0 ? (
           <Card className="p-8 text-center text-slate-500">
             利用できる資格がありません。管理者にアクセス権の付与を依頼してください。
