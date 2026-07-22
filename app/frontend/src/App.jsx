@@ -33,6 +33,7 @@ import SettingsPage from './components/SettingsPage'
 import EmployeesPage from './components/EmployeesPage'
 import AnnouncementsPage from './components/AnnouncementsPage'
 import BidsPage from './components/BidsPage'
+import BidNoticesPage from './components/BidNoticesPage'
 import ConstructionPage from './components/ConstructionPage'
 import FeedbackPage from './components/FeedbackPage'
 import DocumentsPage from './components/DocumentsPage'
@@ -766,7 +767,7 @@ function CalendarCard({ onOpenCalendar }) {
  * ダッシュボードページ。
  * サーバー設定（serverSettings）に基づきアプリを並べ、KPIの表示/非表示を制御。
  */
-function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount, documentsUnreadCount }) {
+function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverSettings, onOpenSettings, onOpenInternal, announcementUnreadCount, documentsUnreadCount, bidNoticeNewCount }) {
   const showKpi = serverSettings?.apps?.show_kpi !== false
   const inAppEnabled = serverSettings?.notifications?.in_app_enabled !== false
 
@@ -908,6 +909,12 @@ function DashboardPage({ user, onLogout, apps, loading, stats, bidStats, serverS
                   'group bg-white dark:bg-ink-800 rounded-2xl border border-slate-200 dark:border-ink-700 p-6 hover:shadow-lg hover:border-brand-200 dark:hover:border-brand-500/50 hover:-translate-y-1 transition-all duration-200 cursor-pointer block relative text-left w-full'
                 const cardInner = (
                   <>
+                    {/* 入札公告の新着バッジ（未確認の募集中件数） */}
+                    {app.key === 'bid-notices' && bidNoticeNewCount > 0 && (
+                      <span className="absolute -top-2 -right-2 min-w-[22px] h-[22px] px-1.5 flex items-center justify-center rounded-full bg-danger-500 text-white text-xs font-bold shadow">
+                        {bidNoticeNewCount > 99 ? '99+' : bidNoticeNewCount}
+                      </span>
+                    )}
                     {/* ピン留め・お気に入りアイコン */}
                     <div className="absolute top-3 right-3 flex gap-1">
                       {app.favorite && (
@@ -1063,6 +1070,8 @@ function AppContent() {
   const [announcementUnreadCount, setAnnouncementUnreadCount] = useState(0)
   // 未読文書回覧数（通知ベル用）
   const [documentsUnreadCount, setDocumentsUnreadCount] = useState(0)
+  // 入札公告の新着数（ダッシュボードのタイルバッジ用。入札権限が無ければ0のまま）
+  const [bidNoticeNewCount, setBidNoticeNewCount] = useState(0)
   // バグ報告・改善の利用権限（FAB表示判定。member 以上で報告可）
   const [canReportFeedback, setCanReportFeedback] = useState(false)
   // 'dashboard' | 'settings' | 'employees' | 'announcements' | 'bids' | 'feedback' | 'documents' | 'workscope' | 'regulations' | 'cards' | 'manual'
@@ -1189,6 +1198,16 @@ function AppContent() {
       }
     }
 
+    // 入札公告の新着数。入札権限が無ければ403で静かに0
+    const fetchBidNoticeNewCount = async () => {
+      try {
+        const response = await axios.get(`${apiUrl}/api/bid-notices/new-count`, makeAuthConfig())
+        setBidNoticeNewCount(response.data?.count || 0)
+      } catch {
+        setBidNoticeNewCount(0)
+      }
+    }
+
     fetchApps()
     fetchStats()
     fetchUserSettings()
@@ -1196,6 +1215,7 @@ function AppContent() {
     fetchDocumentsUnreadCount()
     fetchBidStats()
     fetchMyPerms()
+    fetchBidNoticeNewCount()
   }, [user])
 
   const handleLogout = () => {
@@ -1239,6 +1259,8 @@ function AppContent() {
     page = <AnnouncementsPage onBack={() => setView('dashboard')} />
   } else if (view === 'bids') {
     page = <BidsPage onBack={() => setView('dashboard')} />
+  } else if (view === 'bid-notices') {
+    page = <BidNoticesPage onBack={() => setView('dashboard')} />
   } else if (view === 'construction') {
     page = <ConstructionPage onBack={() => setView('dashboard')} />
   } else if (view === 'quote-compare') {
@@ -1301,6 +1323,7 @@ function AppContent() {
         }}
         announcementUnreadCount={announcementUnreadCount}
         documentsUnreadCount={documentsUnreadCount}
+        bidNoticeNewCount={bidNoticeNewCount}
       />
     )
   }
